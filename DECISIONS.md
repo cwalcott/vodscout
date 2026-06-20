@@ -15,4 +15,10 @@ Format:
 
 ---
 
-<!-- Entries go below. Nothing logged yet. -->
+## 2026-06-20
+
+- Used tomlkit instead of tomllib + tomli-w: single dep, preserves user comments/formatting when writing back to config.
+- Added Rich for terminal output: analyzer report and watched interactive session will need it; easier to add now than retrofit.
+- Skipped pydantic: config is shallow (flat keys + per-streamer emote dicts), a dataclass is sufficient.
+- Skipped mypy: solo side project, annotation friction not worth the bug-catch benefit at this scale.
+- Dev tooling: uv for venv/install workflow, ruff for lint+format (replaces black/isort/flake8).

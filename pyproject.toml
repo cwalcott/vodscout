@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vodchat"
+version = "0.1.0"
+description = "CLI tool to download Twitch VOD chat logs and find interesting moments you haven't watched yet."
+requires-python = ">=3.11"
+dependencies = [
+    "click",
+    "tomlkit",
+    "rich",
+    "chat-downloader",
+]
+
+[project.scripts]
+vodchat = "vodchat.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
