@@ -106,6 +106,19 @@ def detect_spikes(
     return moments
 
 
+def mark_watched(moments: list[Moment], watched_ranges: list[tuple[int, int]]) -> None:
+    """Set Moment.watched for moments whose timestamp falls in any range.
+
+    Takes plain (start, end) tuples rather than the watched module's types —
+    the analyzer reads watched data through the on-disk file (loaded by the
+    caller), keeping the three legs decoupled.
+    """
+    for m in moments:
+        m.watched = any(
+            start <= m.timestamp_seconds < end for start, end in watched_ranges
+        )
+
+
 def report(
     moments: list[Moment], vod_id: str, top_n: int = 10, show_tokens: bool = True
 ) -> None:
@@ -122,18 +135,21 @@ def report(
     for rank, m in enumerate(ranked, 1):
         ts = _format_timestamp(m.timestamp_seconds)
         link = _vod_link(vod_id, m.timestamp_seconds)
+        mark = "  [dim]\\[watched][/dim]" if m.watched else ""
+        style = "dim" if m.watched else None
 
         if show_tokens:
-            line1 = f"[dim]{rank:2}[/dim]  {ts}  [bold]{m.magnitude:.1f}x[/bold]"
+            line1 = f"[dim]{rank:2}[/dim]  {ts}  [bold]{m.magnitude:.1f}x[/bold]{mark}"
             if m.samples:
                 line1 += "  " + "  ".join(m.samples)
-            console.print(line1)
-            console.print(f"    [cyan]{link}[/cyan]")
+            console.print(line1, style=style)
+            console.print(f"    [cyan]{link}[/cyan]", style=style)
             console.print()
         else:
             console.print(
-                f"[dim]{rank:2}[/dim]  {ts}  [bold]{m.magnitude:.1f}x[/bold]"
-                f"  [cyan]{link}[/cyan]"
+                f"[dim]{rank:2}[/dim]  {ts}  [bold]{m.magnitude:.1f}x[/bold]{mark}"
+                f"  [cyan]{link}[/cyan]",
+                style=style,
             )
 
 

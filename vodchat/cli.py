@@ -3,6 +3,7 @@ import click
 from vodchat import analyzer as an
 from vodchat import config as cfg
 from vodchat import fetcher
+from vodchat import watched as wt
 
 
 @click.group()
@@ -50,9 +51,97 @@ def list_vods(streamer: str) -> None:
 
 @main.command()
 @click.argument("vod_id")
-def watched(vod_id: str) -> None:
-    """Interactive watched-range editor for a VOD."""
-    raise NotImplementedError
+@click.option(
+    "--add",
+    "add_spec",
+    metavar="START-END",
+    help="Add a manual watched range, e.g. 1:00:00-1:30:00.",
+)
+@click.option(
+    "--edit", "edit_file", is_flag=True, help="Open the watched-range file in $EDITOR."
+)
+@click.option(
+    "--infer",
+    "infer",
+    is_flag=True,
+    help="Suggest watched ranges from your own chat messages (assistive).",
+)
+@click.option(
+    "--user",
+    "username",
+    help="Your Twitch login for --infer (defaults to twitch_username in config).",
+)
+@click.pass_context
+def watched(
+    ctx: click.Context,
+    vod_id: str,
+    add_spec: str | None,
+    edit_file: bool,
+    infer: bool,
+    username: str | None,
+) -> None:
+    """View or edit watched ranges for a VOD."""
+    config = ctx.obj["config"]
+    chat_dir = config.chat_dir
+
+    try:
+        if edit_file:
+            path = wt._watched_path(vod_id, chat_dir)
+            if not path.exists():
+                wt.save(wt.WatchedRanges([], ""), vod_id, chat_dir)
+            click.edit(filename=str(path))
+            wt.load(vod_id, chat_dir)  # validate it still parses
+        elif add_spec:
+            current = wt.load(vod_id, chat_dir)
+            try:
+                new_range = wt.parse_range(
+                    add_spec, end_resolver=lambda: wt.vod_end_seconds(vod_id, chat_dir)
+                )
+            except ValueError as e:
+                raise click.BadParameter(str(e), param_hint="--add")
+            current.ranges.append(new_range)
+            wt.save(current, vod_id, chat_dir)
+        elif infer:
+            username = username or config.twitch_username
+            if not username:
+                raise click.UsageError(
+                    "No username for --infer. Pass --user <login> or set "
+                    "twitch_username in your config."
+                )
+            suggested = wt.infer_from_chat(
+                vod_id, username, chat_dir, config.gap_threshold_seconds
+            )
+            if not suggested:
+                click.echo(f"No messages from {username!r} found in this VOD's chat.")
+                return
+            click.echo("Suggested ranges from your chat activity:")
+            _print_ranges(wt.WatchedRanges(suggested, ""))
+            if click.confirm("Merge these into the watched ranges?", default=True):
+                current = wt.load(vod_id, chat_dir)
+                current.ranges.extend(suggested)
+                wt.save(current, vod_id, chat_dir)
+            else:
+                click.echo("Discarded.")
+                return
+
+        _print_ranges(wt.load(vod_id, chat_dir))
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+
+def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
+    if not watched_ranges.ranges:
+        click.echo("No watched ranges recorded.")
+        return
+    total = 0
+    for r in watched_ranges.ranges:
+        start = an._format_timestamp(r.start_seconds)
+        end = an._format_timestamp(r.end_seconds)
+        click.echo(f"  {start} – {end}  ({r.source})")
+        total += r.end_seconds - r.start_seconds
+    click.echo(f"Total watched: {an._format_timestamp(total)}")
 
 
 @main.command()
@@ -71,9 +160,20 @@ def watched(vod_id: str) -> None:
 @click.option(
     "--top", "top_n", default=10, show_default=True, help="Number of moments to show."
 )
+@click.option(
+    "--include-watched",
+    "include_watched",
+    is_flag=True,
+    help="Also show moments inside your watched ranges (marked [watched]).",
+)
 @click.pass_context
 def analyze(
-    ctx: click.Context, target: str, analyze_all: bool, show_tokens: bool, top_n: int
+    ctx: click.Context,
+    target: str,
+    analyze_all: bool,
+    show_tokens: bool,
+    top_n: int,
+    include_watched: bool,
 ) -> None:
     """Find interesting moments in a VOD (or all VODs for a streamer with --all)."""
     if analyze_all:
@@ -87,4 +187,13 @@ def analyze(
         raise click.ClickException(str(e))
     messages = an.load_messages(log_path)
     moments = an.detect_spikes(messages, config.bucket_seconds)
+
+    # Read watched ranges through the on-disk file (keeps the legs decoupled).
+    watched_ranges = wt.load(target, config.chat_dir).ranges
+    an.mark_watched(moments, [(r.start_seconds, r.end_seconds) for r in watched_ranges])
+    # Unwatched-only is the default — the whole point is to surface moments you
+    # haven't seen. --include-watched opts back into the full list.
+    if not include_watched:
+        moments = [m for m in moments if not m.watched]
+
     an.report(moments, target, top_n=top_n, show_tokens=show_tokens)

@@ -30,3 +30,20 @@ Format:
 - Top tokens instead of sample messages in report: show 5 most frequent whitespace-split tokens from all messages in the merged spike window, with counts. Sample messages were emote spam and gave no context about why chat spiked.
 - Report format: compact 2-line per moment (metadata + tokens on line 1, link on line 2). --no-tokens flag collapses to 1 line. Dropped Rich table — columns were truncating URLs.
 - Default top_n=10 for `analyze` report; --top N CLI flag to override.
+
+## 2026-06-20 — watched-range leg
+
+- `watched.load` returns empty ranges (not an error) when the `.watched.json` file is missing: a VOD with no recorded watched data is the normal starting state, not a failure.
+- `save` normalizes on write: sort ranges by start, merge overlapping/adjacent. On a merged span, manual source wins over chat-inferred (manual is the trustworthy source of truth per SPEC).
+- `watched.load`/`save` take `(vod_id, chat_dir)` — dropped the `streamer` arg from the stub signatures; the streamer is derived by reusing `analyzer.find_log` (one place owns "find this vod_id under any streamer").
+- `infer_from_chat` gap-threshold default resolved to 600s (config `gap_threshold_seconds`), not the stub's 540 — CLI passes the config value through; the function keeps a default for direct/test calls. Gap of exactly the threshold does NOT split (uses strict `>`).
+- `PAD_SECONDS = 120`: each inferred cluster is padded 2 min on each side (start clamped at 0). Chat lags the moment and people watch before/after typing. Assistive only — `watched --infer` prints suggestions and asks to confirm before merging.
+- Watched UX is non-interactive for now (`watched <vod>` prints; `--add START-END`, `--infer --user`, `--edit` via $EDITOR). Deferred the interactive REPL session (SPEC's menu entry point) — its exact prompts are an open question, better felt out later. Removed the `interactive_edit` stub.
+- Analyzer integration: `mark_watched(moments, ranges)` takes plain `(start, end)` tuples, not the watched dataclasses — analyzer stays decoupled, reads watched data only through the on-disk file (loaded by cli.py). Range membership is half-open `[start, end)`.
+- `analyze` report dims + appends `[watched]` to moments inside watched ranges.
+
+## 2026-06-20 — watched-leg follow-ups (user feedback)
+
+- `analyze` now hides watched moments BY DEFAULT (unwatched-only is the whole point); `--include-watched` opts back into the full list with `[watched]` tags. Replaced the earlier `--unwatched` flag, which had the default backwards. For a VOD with no watched data nothing is filtered, so fresh-VOD behavior is unchanged.
+- Added `twitch_username` config key (top-level). `watched --infer` uses it as the default user; `--user` still overrides. Prompted for (optional) in interactive setup. This was the deferred item from the plan — pulled forward on user request.
+- Open-ended `--add` ranges: `START-end` / `START-` mark to the VOD end; `-END` / `start-END` mark from 0. "End" resolves to the last chat-message timestamp via `watched.vod_end_seconds` (we don't know true VOD length, and the analyzer never flags past the last message anyway). `parse_range` takes a lazy `end_resolver` so the log is only loaded when an open end is actually used.

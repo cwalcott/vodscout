@@ -10,6 +10,7 @@ _KNOWN_KEYS = {
     "downloader",
     "twitch_client_id",
     "twitch_client_secret",
+    "twitch_username",
     "analysis",
 }
 _DOWNLOADERS = ["chat-downloader", "twitchdownloadercli"]
@@ -21,6 +22,8 @@ class Config:
     downloader: str = "chat-downloader"
     twitch_client_id: str = ""
     twitch_client_secret: str = ""
+    # your own login, used as the default for `watched --infer`
+    twitch_username: str = ""
     emotes: dict[str, dict[str, str]] = field(default_factory=dict)
     # Detection thresholds — overridable via [analysis] in config.toml
     bucket_seconds: int = 60
@@ -52,6 +55,7 @@ def load() -> "Config":
         downloader=str(doc.get("downloader", "chat-downloader")),
         twitch_client_id=str(doc.get("twitch_client_id", "")),
         twitch_client_secret=str(doc.get("twitch_client_secret", "")),
+        twitch_username=str(doc.get("twitch_username", "")),
         emotes=emotes,
         bucket_seconds=int(analysis.get("bucket_seconds", 60)),
         gap_threshold_seconds=int(analysis.get("gap_threshold_seconds", 600)),
@@ -72,6 +76,7 @@ def save(config: "Config") -> None:
     doc["downloader"] = config.downloader
     doc["twitch_client_id"] = config.twitch_client_id
     doc["twitch_client_secret"] = config.twitch_client_secret
+    doc["twitch_username"] = config.twitch_username
 
     defaults = Config(chat_dir=config.chat_dir)
     non_default_thresholds = (
@@ -112,6 +117,12 @@ def setup_interactive() -> "Config":
         type=click.Choice(_DOWNLOADERS),
     )
 
+    twitch_username = click.prompt(
+        "Your Twitch username (used to infer watched ranges from your chat)",
+        default="",
+        show_default=False,
+    )
+
     click.echo(
         "\nTwitch API credentials — optional, only needed for streamer-name fetch.\n"
         "Leave blank to skip (you can still fetch by VOD URL/ID without these)."
@@ -128,6 +139,7 @@ def setup_interactive() -> "Config":
         downloader=downloader,
         twitch_client_id=twitch_client_id,
         twitch_client_secret=twitch_client_secret,
+        twitch_username=twitch_username,
     )
     save(config)
     click.echo(f"\nConfig saved to {CONFIG_PATH}\n")

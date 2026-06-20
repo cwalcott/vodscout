@@ -3,10 +3,22 @@ import pytest
 from vodchat.analyzer import (
     MIN_BASELINE,
     MIN_BASELINE_SAMPLES,
+    Moment,
     _format_timestamp,
     _vod_link,
     detect_spikes,
+    mark_watched,
 )
+
+
+def _moment(ts: int) -> Moment:
+    return Moment(
+        timestamp_seconds=ts,
+        signals=["chat-rate"],
+        magnitude=2.0,
+        samples=[],
+        watched=False,
+    )
 
 
 def _msgs(bucket_idx: int, count: int, bucket_seconds: int = 60) -> list[dict]:
@@ -98,6 +110,36 @@ def test_top_tokens_from_run():
     assert len(moments) == 1
     assert len(moments[0].samples) <= 5
     assert moments[0].samples[0].startswith("KEKW")
+
+
+# ── mark_watched ──────────────────────────────────────────────────────────────
+
+
+def test_mark_watched_inside_range():
+    moments = [_moment(100), _moment(5000)]
+    mark_watched(moments, [(0, 1000)])
+    assert moments[0].watched is True
+    assert moments[1].watched is False
+
+
+def test_mark_watched_boundaries_half_open():
+    # start inclusive, end exclusive
+    moments = [_moment(0), _moment(1000)]
+    mark_watched(moments, [(0, 1000)])
+    assert moments[0].watched is True
+    assert moments[1].watched is False
+
+
+def test_mark_watched_no_ranges_leaves_all_unwatched():
+    moments = [_moment(100), _moment(200)]
+    mark_watched(moments, [])
+    assert all(not m.watched for m in moments)
+
+
+def test_mark_watched_multiple_ranges():
+    moments = [_moment(100), _moment(5000), _moment(9000)]
+    mark_watched(moments, [(0, 1000), (8000, 10000)])
+    assert [m.watched for m in moments] == [True, False, True]
 
 
 # ── formatting helpers ────────────────────────────────────────────────────────
