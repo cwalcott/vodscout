@@ -1,9 +1,14 @@
 import click
 
+from vodchat import config as cfg
+
 
 @click.group()
-def main() -> None:
+@click.pass_context
+def main(ctx: click.Context) -> None:
     """Find interesting moments in Twitch VOD chat."""
+    ctx.ensure_object(dict)
+    ctx.obj["config"] = cfg.load()
 
 
 @main.command()
@@ -31,7 +36,9 @@ def watched(vod_id: str) -> None:
 
 @main.command()
 @click.argument("target")
-@click.option("--all", "analyze_all", is_flag=True, help="Analyze all VODs for a streamer.")
+@click.option(
+    "--all", "analyze_all", is_flag=True, help="Analyze all VODs for a streamer."
+)
 def analyze(target: str, analyze_all: bool) -> None:
     """Find interesting moments in a VOD (or all VODs for a streamer with --all)."""
     raise NotImplementedError
