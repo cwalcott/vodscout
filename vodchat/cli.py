@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import click
 
 from vodchat import analyzer as an
@@ -44,9 +46,28 @@ def fetch(
 
 @main.command("list")
 @click.argument("streamer")
-def list_vods(streamer: str) -> None:
+@click.pass_context
+def list_vods(ctx: click.Context, streamer: str) -> None:
     """Show downloaded VODs for a streamer."""
-    raise NotImplementedError
+    config = ctx.obj["config"]
+    streamer_dir = config.chat_dir / streamer
+    if not streamer_dir.is_dir():
+        raise click.ClickException(f"No downloaded VODs for {streamer!r}.")
+
+    logs = list(streamer_dir.glob("*.txt"))
+    if not logs:
+        raise click.ClickException(f"No downloaded VODs for {streamer!r}.")
+
+    # Newest first — VOD IDs increase over time, so a numeric sort puts recent
+    # VODs at the top. Fall back to string sort if an ID isn't purely numeric.
+    def sort_key(path: Path) -> tuple[int, str]:
+        stem = path.stem
+        return (int(stem) if stem.isdigit() else -1, stem)
+
+    for path in sorted(logs, key=sort_key, reverse=True):
+        watched = path.with_suffix(".watched.json").exists()
+        click.echo(f"  {path.stem}{' [watched]' if watched else ''}")
+    click.echo(f"{len(logs)} VOD(s) for {streamer}")
 
 
 @main.command()
