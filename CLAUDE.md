@@ -54,3 +54,6 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 - When a real design decision gets made or reversed during a session
   (e.g. a threshold value, a UX detail), add a dated one-line entry to
   `DECISIONS.md` rather than letting it live only in chat history.
+- Before committing, check that `DECISIONS.md` and `CLAUDE.md` are up to
+  date. Commits are the right moment to flush any decisions made during the
+  session.
