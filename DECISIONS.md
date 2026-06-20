@@ -22,3 +22,4 @@ Format:
 - Skipped pydantic: config is shallow (flat keys + per-streamer emote dicts), a dataclass is sufficient.
 - Skipped mypy: solo side project, annotation friction not worth the bug-catch benefit at this scale.
 - Dev tooling: uv for venv/install workflow, ruff for lint+format (replaces black/isort/flake8).
+- Default chat_dir in interactive setup is ~/Documents/vodchat: visible in Finder, natural on macOS; user with a sync folder (e.g. Synology) will override it.
