@@ -145,10 +145,7 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
 
 
 @main.command()
-@click.argument("target")
-@click.option(
-    "--all", "analyze_all", is_flag=True, help="Analyze all VODs for a streamer."
-)
+@click.argument("vod_id")
 @click.option(
     "--no-tokens",
     "show_tokens",
@@ -169,18 +166,15 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
 @click.pass_context
 def analyze(
     ctx: click.Context,
-    target: str,
-    analyze_all: bool,
+    vod_id: str,
     show_tokens: bool,
     top_n: int,
     include_watched: bool,
 ) -> None:
-    """Find interesting moments in a VOD (or all VODs for a streamer with --all)."""
-    if analyze_all:
-        raise click.ClickException("--all not yet implemented.")
+    """Find interesting moments in a VOD."""
     config = ctx.obj["config"]
     try:
-        _streamer, log_path = an.find_log(target, config.chat_dir)
+        _streamer, log_path = an.find_log(vod_id, config.chat_dir)
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
     except ValueError as e:
@@ -189,11 +183,11 @@ def analyze(
     moments = an.detect_spikes(messages, config.bucket_seconds)
 
     # Read watched ranges through the on-disk file (keeps the legs decoupled).
-    watched_ranges = wt.load(target, config.chat_dir).ranges
+    watched_ranges = wt.load(vod_id, config.chat_dir).ranges
     an.mark_watched(moments, [(r.start_seconds, r.end_seconds) for r in watched_ranges])
     # Unwatched-only is the default — the whole point is to surface moments you
     # haven't seen. --include-watched opts back into the full list.
     if not include_watched:
         moments = [m for m in moments if not m.watched]
 
-    an.report(moments, target, top_n=top_n, show_tokens=show_tokens)
+    an.report(moments, vod_id, top_n=top_n, show_tokens=show_tokens)
