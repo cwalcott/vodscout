@@ -1,5 +1,6 @@
 import click
 
+from vodchat import analyzer as an
 from vodchat import config as cfg
 from vodchat import fetcher
 
@@ -59,6 +60,31 @@ def watched(vod_id: str) -> None:
 @click.option(
     "--all", "analyze_all", is_flag=True, help="Analyze all VODs for a streamer."
 )
-def analyze(target: str, analyze_all: bool) -> None:
+@click.option(
+    "--no-tokens",
+    "show_tokens",
+    is_flag=True,
+    flag_value=False,
+    default=True,
+    help="Omit top tokens from the report.",
+)
+@click.option(
+    "--top", "top_n", default=10, show_default=True, help="Number of moments to show."
+)
+@click.pass_context
+def analyze(
+    ctx: click.Context, target: str, analyze_all: bool, show_tokens: bool, top_n: int
+) -> None:
     """Find interesting moments in a VOD (or all VODs for a streamer with --all)."""
-    raise NotImplementedError
+    if analyze_all:
+        raise click.ClickException("--all not yet implemented.")
+    config = ctx.obj["config"]
+    try:
+        _streamer, log_path = an.find_log(target, config.chat_dir)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+    except ValueError as e:
+        raise click.ClickException(str(e))
+    messages = an.load_messages(log_path)
+    moments = an.detect_spikes(messages, config.bucket_seconds)
+    an.report(moments, target, top_n=top_n, show_tokens=show_tokens)

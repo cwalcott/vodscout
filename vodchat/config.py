@@ -24,7 +24,6 @@ class Config:
     emotes: dict[str, dict[str, str]] = field(default_factory=dict)
     # Detection thresholds — overridable via [analysis] in config.toml
     bucket_seconds: int = 60
-    spike_multiplier: float = 3.0
     gap_threshold_seconds: int = 600  # 10-min gap splits watched-inference sessions
     min_emote_count: int = 5
 
@@ -55,7 +54,6 @@ def load() -> "Config":
         twitch_client_secret=str(doc.get("twitch_client_secret", "")),
         emotes=emotes,
         bucket_seconds=int(analysis.get("bucket_seconds", 60)),
-        spike_multiplier=float(analysis.get("spike_multiplier", 3.0)),
         gap_threshold_seconds=int(analysis.get("gap_threshold_seconds", 600)),
         min_emote_count=int(analysis.get("min_emote_count", 5)),
     )
@@ -78,14 +76,12 @@ def save(config: "Config") -> None:
     defaults = Config(chat_dir=config.chat_dir)
     non_default_thresholds = (
         config.bucket_seconds != defaults.bucket_seconds
-        or config.spike_multiplier != defaults.spike_multiplier
         or config.gap_threshold_seconds != defaults.gap_threshold_seconds
         or config.min_emote_count != defaults.min_emote_count
     )
     if non_default_thresholds or "analysis" in doc:
         analysis: dict = doc.get("analysis") or tomlkit.table()  # type: ignore[assignment]
         analysis["bucket_seconds"] = config.bucket_seconds
-        analysis["spike_multiplier"] = config.spike_multiplier
         analysis["gap_threshold_seconds"] = config.gap_threshold_seconds
         analysis["min_emote_count"] = config.min_emote_count
         doc["analysis"] = analysis
