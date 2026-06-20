@@ -1,6 +1,7 @@
 import click
 
 from vodchat import config as cfg
+from vodchat import fetcher
 
 
 @click.group()
@@ -15,9 +16,28 @@ def main(ctx: click.Context) -> None:
 @click.argument("streamer", required=False)
 @click.option("--url", help="VOD URL or ID (no credentials required).")
 @click.option("--all", "fetch_all", is_flag=True, help="Fetch all undownloaded VODs.")
-def fetch(streamer: str | None, url: str | None, fetch_all: bool) -> None:
+@click.pass_context
+def fetch(
+    ctx: click.Context, streamer: str | None, url: str | None, fetch_all: bool
+) -> None:
     """Download chat for a VOD."""
-    raise NotImplementedError
+    config = ctx.obj["config"]
+
+    if url:
+        try:
+            out_path = fetcher.fetch_by_url(url, config)
+            click.echo(f"Saved to {out_path}")
+        except FileExistsError as e:
+            click.echo(str(e))
+        except Exception as e:
+            raise click.ClickException(str(e))
+    elif streamer:
+        raise click.ClickException(
+            "Streamer-based fetch not yet implemented. "
+            "Use --url to fetch by VOD URL or ID instead."
+        )
+    else:
+        raise click.UsageError("Provide a VOD --url or a streamer name.")
 
 
 @main.command("list")

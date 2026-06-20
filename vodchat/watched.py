@@ -23,7 +23,9 @@ def save(ranges: WatchedRanges, vod_id: str, streamer: str, chat_dir: Path) -> N
     raise NotImplementedError
 
 
-def infer_from_chat(vod_id: str, username: str, chat_dir: Path, gap_threshold_seconds: int = 540) -> list[WatchedRange]:
+def infer_from_chat(
+    vod_id: str, username: str, chat_dir: Path, gap_threshold_seconds: int = 540
+) -> list[WatchedRange]:
     """Infer watched ranges from the user's own messages in the chat log."""
     raise NotImplementedError
 

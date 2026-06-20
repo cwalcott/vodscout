@@ -13,7 +13,12 @@ class Moment:
     watched: bool
 
 
-def analyze(vod_id: str, streamer: str, chat_dir: Path, watched_ranges: list[WatchedRange] | None = None) -> list[Moment]:
+def analyze(
+    vod_id: str,
+    streamer: str,
+    chat_dir: Path,
+    watched_ranges: list[WatchedRange] | None = None,
+) -> list[Moment]:
     """Return ranked interesting moments from a VOD's chat log."""
     raise NotImplementedError
 

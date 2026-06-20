@@ -11,7 +11,7 @@ dependencies = [
     "click",
     "tomlkit",
     "rich",
-    "chat-downloader",
+    "requests>=2.34.2",
 ]
 
 [project.scripts]
