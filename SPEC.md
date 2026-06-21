@@ -201,27 +201,33 @@ copying a VOD id, then re-typing it for each follow-up command. The shell holds
 that context.
 
 It is a *second consumer* of the three legs' APIs, parallel to `cli.py` — not a
-new leg. Session state is just two things: the **current streamer** (its merged
-VOD list) and the **selected VOD**. Flow: resolve a streamer (arg →
-`default_streamer` config key → prompt) → arrow through the merged local+remote
-VOD list → drill into a VOD → act on it (analyze / `--emote` / watched / emotes
-/ download / delete).
+new leg. Session state is just the **current streamer** (its merged VOD list)
+and the **selected VOD**. Flow: resolve a streamer (arg → `default_streamer`
+config key → prompt) → arrow through the merged local+remote VOD **list** → press
+Enter to drill into a full-screen VOD **window** showing top moments (left) and
+emotes (right) side by side. In the window: `w` toggles All/Unwatched (drives the
+moment list), Enter opens a moment's timestamped link or drills into an emote's
+own spikes, `f` favorites an emote (pinned first), Esc returns to the list.
+Watched-range coverage shows in the window; inline editing + auto-infer are
+planned there too (see the watched section).
 
 Implementation is contained in `ui.py`: the three legs never import it, and all
-interactive-UI dependencies live there, so swapping the approach later (or going
-to a full TUI) is a contained change. Built on **questionary** (prompts — arrow
-select, checkbox, confirm, autocomplete) for input and **Rich** for rendering.
-A full-screen TUI (Textual/prompt_toolkit) was considered and deferred: the
-lightweight sequence-of-prompts model is enough to settle the interaction shape
-first; revisit if it proves limiting.
+interactive-UI dependencies live there. Built as a full-screen **Textual** TUI
+(drill-in screens, side-by-side panes, a persistent All/Unwatched toggle). It
+began as a lightweight **questionary** sequence-of-prompts shell, replaced once
+that model proved limiting — output scrolled instead of holding a view, and it
+couldn't show moments and emotes together or carry a persistent toggle.
+Confining all UI deps to `ui.py` made the swap contained, as planned (see
+DECISIONS 2026-06-21).
 
 Cross-leg orchestration the two front ends share lives in small, front-end-
 neutral modules they both import — not in the legs, and not duplicated:
 `vodlist.merged_vods` (the local+remote VOD list) and `actions.analyze` /
 `actions.emote_counts` (spike detection + watched-range filtering). These
 compose `analyzer` and `watched`, which can't import each other (`watched`
-imports `analyzer`), so the glue belongs one level up. The shared *renderer*
-for moments is `analyzer.report` (already Rich), called by both front ends.
+imports `analyzer`), so the glue belongs one level up. `analyzer.report` (Rich)
+is the CLI's moment renderer; the TUI renders moments into its own Textual
+widgets from the same `actions` results.
 
 ## Shared conventions
 

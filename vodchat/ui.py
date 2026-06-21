@@ -1,35 +1,327 @@
-"""Interactive terminal shell — a front end over the same leg APIs as cli.py.
+"""Interactive terminal UI — a Textual front end over the same leg APIs as cli.py.
 
-This is a second consumer of fetcher/watched/analyzer (alongside cli.py), and
-it stays self-contained: the three legs never import this module, and all the
-questionary/Rich interaction lives here so the rest of the package carries no
-interactive-UI dependency. Built on questionary (prompts) + Rich (rendering).
+This is a second consumer of fetcher/watched/analyzer (alongside cli.py). The
+three legs never import this module, and all the Textual interaction lives here,
+so the rest of the package carries no interactive-UI dependency.
 
-Session state is just two things: the current streamer (its merged VOD list)
-and the selected VOD. The per-VOD view drives the full set of actions through
-the shared `actions`/`vodlist` modules: analyze (overall + per-emote), top
-emotes, watched ranges (view / add / clear), download, and delete.
+Flow: a VOD *list* screen (the streamer's merged local+remote VODs); selecting a
+VOD pushes a full *VOD window* with top moments (left) and emotes (right) side by
+side, a `w` All/Unwatched toggle that drives the moment list, and `f` to favorite
+an emote (pinned first). The list, moments, and emotes are real now — favorite
+*persistence* is still an in-memory stub (slice 3) and watched-editing is not
+wired yet (slice 4).
 """
 
-import click  # only for click.edit ($EDITOR launch); all prompts use questionary
-import questionary
-from rich.console import Console
-from rich.table import Table
+import webbrowser
+from collections import Counter
 
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Header, Static
+
+from vodchat import _fixtures as fx
 from vodchat import actions, fetcher, vodlist
 from vodchat import analyzer as an
 from vodchat import config as cfg
 from vodchat import watched as wt
 
-console = Console()
 
-# Sentinel selection values, distinct from any row index.
-_QUIT = "__quit__"
-_BACK = "__back__"
-_DL_ALL = "__dl_all__"
+def _coverage_bar(watched_seconds: int, duration_seconds: int, width: int = 5) -> str:
+    """A tiny ▓░ progress bar + percentage, e.g. '▓▓▓░░  62%'."""
+    if not duration_seconds:
+        return f"{'░' * width}   0%"
+    frac = max(0.0, min(1.0, watched_seconds / duration_seconds))
+    filled = round(frac * width)
+    bar = "▓" * filled + "░" * (width - filled)
+    return f"{bar} {round(frac * 100):>3}%"
 
-# Longest VOD title shown in the list before truncating with an ellipsis.
-_TITLE_MAX = 45
+
+def _watched_seconds(vod_id: str, config: "cfg.Config") -> int:
+    """Total watched time for a VOD, for the coverage bar. 0 if none/unreadable."""
+    try:
+        ranges = wt.load(vod_id, config.chat_dir).ranges
+    except (FileNotFoundError, ValueError):
+        return 0
+    return sum(r.end_seconds - r.start_seconds for r in ranges)
+
+
+class VodListScreen(Screen):
+    """The streamer's VOD list. Enter drills into a VOD window."""
+
+    BINDINGS = [
+        ("r", "refresh", "Refresh"),
+        ("q", "app.quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield DataTable(id="vodlist", cursor_type="row", zebra_stripes=True)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#vodlist", DataTable)
+        table.add_columns("date", "length", "title", "watched", "")
+        self._rows: dict[str, dict] = {}
+        self._populate()
+        table.focus()
+
+    def _populate(self) -> None:
+        table = self.query_one("#vodlist", DataTable)
+        table.clear()
+        self._rows = {}
+        try:
+            rows, login, note = vodlist.merged_vods(
+                self.app.streamer, self.app.config, self.app.offline
+            )
+        except Exception as e:
+            self.notify(f"Couldn't load VODs: {e}", severity="error")
+            return
+
+        self.app.sub_title = login
+        for v in rows:
+            v["watched_seconds"] = (
+                _watched_seconds(v["id"], self.app.config) if v["downloaded"] else 0
+            )
+            self._rows[v["id"]] = v
+            date = (v["created_at"] or "")[:10] or "??????????"
+            dur = fetcher._format_duration(v["duration_seconds"])
+            cov = _coverage_bar(v["watched_seconds"], v["duration_seconds"])
+            dl = "⬇" if v["downloaded"] else " "
+            table.add_row(date, dur, v["title"] or "(no title)", cov, dl, key=v["id"])
+
+        if note:
+            self.notify(note, severity="warning")
+        elif not rows:
+            self.notify("No VODs found.", severity="warning")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        vod = self._rows.get(event.row_key.value)
+        if vod:
+            self.app.push_screen(VodScreen(vod))
+
+    def action_refresh(self) -> None:
+        self._populate()
+
+
+class VodScreen(Screen):
+    """One VOD: top moments (left) + emotes (right), with an All/Unwatched mode."""
+
+    BINDINGS = [
+        ("escape", "app.pop_screen", "Back"),
+        ("w", "toggle_mode", "All/Unwatched"),
+        ("f", "favorite", "★ emote"),
+        ("o", "overall", "Overall"),
+        ("q", "app.quit", "Quit"),
+    ]
+
+    def __init__(self, vod: dict) -> None:
+        super().__init__()
+        self.vod = vod
+        self.show_all = False  # Unwatched is the default view
+        self.current_emote: str | None = None  # None = overall chat-volume view
+        self.favorites: set[str] = set(fx.fixture_favorites(self._streamer))
+        self._raw_moments: list[an.Moment] = []  # all moments (watched-flagged)
+        self._emote_counts: Counter = Counter()
+
+    @property
+    def _streamer(self) -> str:
+        return self.app.streamer
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Static(id="vodheader")
+        if self.vod["downloaded"]:
+            with Horizontal(id="panes"):
+                yield DataTable(id="moments", cursor_type="row", zebra_stripes=True)
+                yield DataTable(id="emotes", cursor_type="row", zebra_stripes=True)
+        else:
+            yield Static(
+                "\n  [dim]Not downloaded yet. Downloading its chat is a later "
+                "slice — for now there's nothing to analyze.[/dim]",
+                id="placeholder",
+            )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._refresh_header()
+        if not self.vod["downloaded"]:
+            return
+        self.query_one("#moments", DataTable).border_title = "Top moments"
+        self.query_one(
+            "#emotes", DataTable
+        ).border_title = "Emotes  (f: ★ · tab: focus)"
+        self._load_moments()
+        self._load_emotes()
+        self._populate_moments()
+        self._populate_emotes()
+
+    # --- data loading (the real leg calls) -------------------------------
+
+    def _load_moments(self) -> None:
+        """Fetch all moments for the current view (overall or current_emote),
+        watched-flagged; the All/Unwatched filter is applied at render time."""
+        try:
+            result = actions.analyze(
+                self.vod["id"],
+                self.app.config,
+                emote=self.current_emote,
+                include_watched=True,
+            )
+            self._raw_moments = result.moments
+        except actions.EmoteNotFound:
+            self._raw_moments = []
+            self.notify(f"No {self.current_emote!r} spikes here.", severity="warning")
+        except (FileNotFoundError, ValueError) as e:
+            self._raw_moments = []
+            self.notify(str(e), severity="error")
+
+    def _load_emotes(self) -> None:
+        try:
+            self._emote_counts = actions.emote_counts(self.vod["id"], self.app.config)
+        except (FileNotFoundError, ValueError) as e:
+            self._emote_counts = Counter()
+            self.notify(str(e), severity="error")
+
+    # --- rendering -------------------------------------------------------
+
+    def _refresh_header(self) -> None:
+        v = self.vod
+        date = (v["created_at"] or "")[:10] or "unknown date"
+        dur = fetcher._format_duration(v["duration_seconds"])
+        cov = _coverage_bar(v.get("watched_seconds", 0), v["duration_seconds"]).strip()
+        mode = "All" if self.show_all else "Unwatched"
+        showing = (
+            f"{self.current_emote} spikes" if self.current_emote else "chat volume"
+        )
+        self.query_one("#vodheader", Static).update(
+            f"[b]{v['title'] or '(no title)'}[/b]\n"
+            f"[dim]{self._streamer} · {date} · {dur} · {cov} watched[/dim]\n"
+            f"mode: [b]{mode}[/b]  (w toggles)     showing: [b]{showing}[/b]"
+        )
+
+    def _visible(self, moments: list[an.Moment]) -> list[an.Moment]:
+        ordered = sorted(moments, key=lambda m: m.magnitude, reverse=True)
+        if self.show_all:
+            return ordered
+        return [m for m in ordered if not m.watched]
+
+    def _populate_moments(self) -> None:
+        table = self.query_one("#moments", DataTable)
+        table.clear(columns=True)
+        per_emote = self.current_emote is not None
+        table.add_columns("#", "time", "mag", "uses" if per_emote else "top emotes")
+
+        moments = self._visible(self._raw_moments)
+        if not moments:
+            table.add_row("", "—", "", "[dim](nothing in this view)[/dim]")
+            return
+        for i, m in enumerate(moments, 1):
+            ts = an._format_timestamp(m.timestamp_seconds)
+            mag = f"{m.magnitude:.1f}×"
+            if per_emote:
+                detail = f"{m.count} uses"
+            else:
+                detail = (
+                    "  ".join(f"{e} [dim]({n})[/dim]" for e, n in m.top_emotes)
+                    or "[dim]—[/dim]"
+                )
+            if self.show_all and m.watched:
+                detail += "  [dim]\\[watched][/dim]"
+            table.add_row(str(i), ts, mag, detail, key=str(m.timestamp_seconds))
+
+    def _populate_emotes(self) -> None:
+        table = self.query_one("#emotes", DataTable)
+        table.clear(columns=True)
+        table.add_columns("emote", "uses")
+        items = self._emote_counts.most_common()
+        if not items:
+            table.add_row("[dim](no emotes)[/dim]", "")
+            return
+        favs = [it for it in items if it[0] in self.favorites]
+        rest = [it for it in items if it[0] not in self.favorites]
+        for name, n in favs + rest:
+            star = "★ " if name in self.favorites else "  "
+            table.add_row(f"{star}{name}", str(n), key=name)
+
+    # --- actions ---------------------------------------------------------
+
+    def action_toggle_mode(self) -> None:
+        if not self.vod["downloaded"]:
+            return
+        self.show_all = not self.show_all
+        self._refresh_header()
+        self._populate_moments()
+
+    def action_overall(self) -> None:
+        if self.vod["downloaded"] and self.current_emote is not None:
+            self.current_emote = None
+            self._load_moments()
+            self._refresh_header()
+            self._populate_moments()
+
+    def action_favorite(self) -> None:
+        if not self.vod["downloaded"]:
+            return
+        table = self.query_one("#emotes", DataTable)
+        if not table.has_focus:
+            self.notify("Tab to the Emotes pane first, then f to favorite.")
+            return
+        if table.row_count == 0:
+            return
+        row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        name = row_key.value
+        if name not in self._emote_counts:
+            return  # the "(no emotes)" placeholder row
+        if name in self.favorites:
+            self.favorites.discard(name)
+        else:
+            self.favorites.add(name)
+        fx.save_favorites(self._streamer, self.favorites)
+        self._populate_emotes()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if event.data_table.id == "moments":
+            ts = event.row_key.value
+            if ts and str(ts).isdigit():
+                link = an._vod_link(self.vod["id"], int(ts))
+                webbrowser.open(link)
+                self.notify(f"Opening {link}")
+        elif event.data_table.id == "emotes":
+            name = event.row_key.value
+            if name in self._emote_counts:
+                self.current_emote = name
+                self._load_moments()
+                self._refresh_header()
+                self._populate_moments()
+
+
+class VodchatApp(App):
+    """Top-level Textual app. Holds the cross-screen state the screens read:
+    the resolved config, the current streamer, and the offline flag."""
+
+    CSS = """
+    #vodlist { height: 1fr; }
+
+    #vodheader { height: auto; padding: 1 2; background: $panel; }
+    #panes { height: 1fr; }
+    #moments { width: 2fr; border: round $primary; }
+    #emotes { width: 1fr; border: round $primary; }
+    #placeholder { height: 1fr; padding: 2; }
+    """
+
+    def __init__(
+        self, config: "cfg.Config", streamer: str, offline: bool = False
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.streamer = streamer
+        self.offline = offline
+
+    def on_mount(self) -> None:
+        self.title = "vodchat"
+        self.sub_title = self.streamer
+        self.push_screen(VodListScreen())
 
 
 def run_shell(
@@ -37,400 +329,16 @@ def run_shell(
 ) -> None:
     """Entry point for `vodchat browse` and bare `vodchat`.
 
-    Resolves the streamer from the argument, then config's default_streamer,
-    then an interactive prompt — and opens that streamer's VOD list.
+    Resolves the streamer (argument → config.default_streamer → a one-off
+    prompt), then launches the Textual app against the real merged VOD list.
     """
-    streamer = (streamer or config.default_streamer or _prompt_streamer()).strip()
+    streamer = (streamer or config.default_streamer or "").strip()
+    if not streamer:
+        import click
+
+        streamer = (
+            click.prompt("Streamer to browse", default="", show_default=False) or ""
+        ).strip()
     if not streamer:
         return
-    _streamer_view(streamer, config, offline)
-
-
-def _prompt_streamer() -> str:
-    answer = questionary.text("Streamer to browse:").ask()
-    return (answer or "").strip()
-
-
-def _select(message: str, choices: list):
-    """questionary.select with `q` bound to quit the shell (returns _QUIT).
-
-    questionary has no built-in quit key, so we add one to the underlying
-    prompt_toolkit application: pressing `q` exits the prompt with the _QUIT
-    sentinel, the same value the explicit Quit choice carries.
-    """
-    question = questionary.select(
-        message, choices=choices, instruction="(↑/↓ to move, q to quit)"
-    )
-
-    @question.application.key_bindings.add("q")
-    def _quit(event) -> None:
-        event.app.exit(result=_QUIT)
-
-    return question.ask()
-
-
-def _streamer_view(streamer: str, config: "cfg.Config", offline: bool) -> None:
-    """List a streamer's VODs and let the user drill into one. Loops until quit."""
-    while True:
-        rows, login, note = vodlist.merged_vods(streamer, config, offline)
-        if not rows:
-            console.print(note or f"No VODs found for [bold]{streamer}[/].")
-            return
-
-        n_down = sum(1 for r in rows if r["downloaded"])
-        console.print(f"\n[bold]{login}[/] — {len(rows)} VOD(s), {n_down} downloaded")
-        if note:
-            console.print(f"[yellow]{note}[/]")
-
-        choices = [_vod_choice(i, r) for i, r in enumerate(rows)]
-        choices.append(questionary.Separator())
-        undownloaded = [r for r in rows if not r["downloaded"]]
-        if undownloaded:
-            choices.append(
-                questionary.Choice(
-                    f"⬇ Download all not-downloaded ({len(undownloaded)})",
-                    value=_DL_ALL,
-                )
-            )
-        choices.append(questionary.Choice("Quit", value=_QUIT))
-
-        selected = _select("Select a VOD:", choices)
-        # None = Ctrl-C / Esc; treat like Quit.
-        if selected is None or selected == _QUIT:
-            return
-        if selected == _DL_ALL:
-            _download_all(undownloaded, config)
-            continue
-        if _vod_view(rows[selected], login, config) == _QUIT:
-            return
-
-
-def _vod_choice(index: int, row: dict) -> "questionary.Choice":
-    date = (row["created_at"] or "")[:10] or "??????????"
-    dur = fetcher._format_duration(row["duration_seconds"])
-    tags = ""
-    if row["downloaded"]:
-        tags += " [downloaded]"
-    if row["watched"]:
-        tags += " [watched]"
-    title = row["title"] or "(no title)"
-    if len(title) > _TITLE_MAX:
-        title = title[: _TITLE_MAX - 1].rstrip() + "…"
-    text = f"{date}  {dur:>9}  {title}{tags}"
-    # Grey out already-downloaded rows so the not-yet-grabbed ones stand out
-    # (mirrors the dimmed rows in `vodchat vods`). questionary renders a list of
-    # (style, text) tuples as formatted text; a plain str stays default-colored.
-    if row["downloaded"]:
-        return questionary.Choice(title=[("fg:ansibrightblack", text)], value=index)
-    return questionary.Choice(title=text, value=index)
-
-
-def _vod_view(row: dict, login: str, config: "cfg.Config") -> str:
-    """Detail + action menu for one VOD. Loops so several actions can be run.
-
-    Returns _BACK to return to the list or _QUIT to exit the shell. Analyses
-    need the chat log, so a not-yet-downloaded VOD only offers Download.
-    """
-    while True:
-        _print_vod(row, login)
-        if row["downloaded"]:
-            choices = [
-                questionary.Choice("Analyze (chat volume)", value="analyze"),
-                questionary.Choice("Analyze an emote…", value="emote"),
-                questionary.Choice("Top emotes", value="emotes"),
-                questionary.Choice("Watched ranges…", value="watched"),
-                questionary.Choice("Delete VOD…", value="delete"),
-            ]
-        else:
-            choices = [questionary.Choice("Download chat", value="download")]
-        choices += [
-            questionary.Separator(),
-            questionary.Choice("Back to list", value=_BACK),
-            questionary.Choice("Quit", value=_QUIT),
-        ]
-
-        action = _select("Action:", choices)
-        if action is None or action == _BACK:
-            return _BACK
-        if action == _QUIT:
-            return _QUIT
-        if action == "download":
-            if _download(row["id"], config):
-                row["downloaded"] = True  # unlock the analysis actions in place
-            continue
-        if action == "delete":
-            if _delete(row, config):
-                return _BACK  # files are gone — re-merge the list
-            continue
-        if action == "watched":
-            if _watched_menu(row, config) == _QUIT:
-                return _QUIT
-            continue
-        _run_action(action, row["id"], config)
-
-
-def _run_action(action: str, vod_id: str, config: "cfg.Config") -> None:
-    if action == "analyze":
-        _do_analyze(vod_id, config, emote=None)
-    elif action == "emote":
-        emote = _pick_emote(vod_id, config)
-        if emote:
-            _do_analyze(vod_id, config, emote=emote)
-    elif action == "emotes":
-        _show_emotes(vod_id, config)
-
-
-def _watched_menu(row: dict, config: "cfg.Config") -> str:
-    """Submenu for one VOD's watched ranges. Returns _QUIT to exit the shell."""
-    while True:
-        choices = [
-            questionary.Choice("View ranges", value="view"),
-            questionary.Choice("Add a manual range", value="add"),
-            questionary.Choice("Infer from chat", value="infer"),
-            questionary.Choice("Edit in $EDITOR", value="edit"),
-        ]
-        if row["watched"]:
-            choices.append(questionary.Choice("Clear all ranges", value="clear"))
-        choices += [
-            questionary.Separator(),
-            questionary.Choice("Back", value=_BACK),
-        ]
-        action = _select("Watched ranges:", choices)
-        if action == _QUIT:
-            return _QUIT
-        if action is None or action == _BACK:
-            return _BACK
-        if action == "view":
-            _show_watched(row["id"], config)
-        elif action == "add":
-            _add_watched(row, config)
-        elif action == "infer":
-            _infer_watched(row, config)
-        elif action == "edit":
-            _edit_watched(row, config)
-        elif action == "clear":
-            _clear_watched(row, config)
-
-
-def _add_watched(row: dict, config: "cfg.Config") -> None:
-    """Prompt for a START-END range and merge it into the VOD's watched ranges."""
-    spec = questionary.text("Range to add (START-END, e.g. 1:00:00-1:30:00):").ask()
-    if not spec or not spec.strip():
-        return
-    try:
-        new_range = wt.parse_range(
-            spec,
-            end_resolver=lambda: wt.vod_end_seconds(row["id"], config.chat_dir),
-        )
-    except (ValueError, FileNotFoundError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    actions.add_ranges(row["id"], config, [new_range])
-    row["watched"] = True
-    start = an._format_timestamp(new_range.start_seconds)
-    end = an._format_timestamp(new_range.end_seconds)
-    console.print(f"[green]Added {start} – {end} (manual).[/]")
-
-
-def _infer_watched(row: dict, config: "cfg.Config") -> None:
-    """Suggest watched ranges from the user's own chat, then confirm a merge.
-
-    Mirrors `watched --infer`: username comes from config (prompted only if
-    unset), gap from the config threshold (no per-run prompt — matches the
-    shell's defaults-only stance; use the CLI's --gap to tune).
-    """
-    vod_id = row["id"]
-    username = config.twitch_username
-    if not username:
-        username = (
-            questionary.text("Your Twitch username (for inference):").ask() or ""
-        ).strip()
-    if not username:
-        console.print("[yellow]Need a username to infer — none given.[/]")
-        return
-    try:
-        suggested = wt.infer_from_chat(
-            vod_id, username, config.chat_dir, config.gap_threshold_seconds
-        )
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    if not suggested:
-        console.print(
-            f"[yellow]No messages from {username!r} found in this VOD's chat.[/]"
-        )
-        return
-    _render_ranges(suggested, "Suggested from your chat activity")
-    if questionary.confirm("Merge these into the watched ranges?", default=True).ask():
-        actions.add_ranges(vod_id, config, suggested)
-        row["watched"] = True
-        console.print("[green]Merged.[/]")
-    else:
-        console.print("Discarded.")
-
-
-def _edit_watched(row: dict, config: "cfg.Config") -> None:
-    """Open the VOD's .watched.json in $EDITOR (parity with `watched --edit`)."""
-    vod_id = row["id"]
-    try:
-        path = wt._watched_path(vod_id, config.chat_dir)
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    if not path.exists():
-        wt.save(wt.WatchedRanges([], ""), vod_id, config.chat_dir)
-    click.edit(filename=str(path))
-    try:
-        loaded = wt.load(vod_id, config.chat_dir)  # validate it still parses
-    except (ValueError, KeyError) as e:
-        console.print(f"[red]Couldn't parse the edited file: {e}[/]")
-        return
-    row["watched"] = bool(loaded.ranges)
-    console.print("[green]Saved.[/]")
-
-
-def _download(vod_id: str, config: "cfg.Config") -> bool:
-    """Download one VOD's chat. Returns True if it's now on disk."""
-    try:
-        out_path = fetcher.fetch_by_url(vod_id, config)
-        console.print(f"[green]Saved {out_path}[/]")
-        return True
-    except FileExistsError as e:
-        console.print(f"[yellow]{e}[/]")
-        return True  # already downloaded counts as on-disk
-    except Exception as e:
-        console.print(f"[red]Failed to download {vod_id}: {e}[/]")
-        return False
-
-
-def _download_all(rows: list[dict], config: "cfg.Config") -> None:
-    if not rows:
-        return
-    if not questionary.confirm(
-        f"Download chat for {len(rows)} VOD(s)?", default=True
-    ).ask():
-        return
-    for r in rows:
-        _download(r["id"], config)
-
-
-def _delete(row: dict, config: "cfg.Config") -> bool:
-    """Confirm and delete a VOD's local files. Returns True if deleted."""
-    vod_id = row["id"]
-    if not questionary.confirm(
-        f"Delete all local files for VOD {vod_id}?", default=False
-    ).ask():
-        console.print("Cancelled.")
-        return False
-    try:
-        removed = actions.delete_vod(vod_id, config)
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return False
-    console.print(f"[green]Deleted {len(removed)} file(s) for VOD {vod_id}.[/]")
-    return True
-
-
-def _clear_watched(row: dict, config: "cfg.Config") -> None:
-    try:
-        cleared = wt.clear(row["id"], config.chat_dir)
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    if cleared:
-        row["watched"] = False
-        console.print("[green]Cleared watched ranges.[/]")
-    else:
-        console.print("[yellow]No watched ranges to clear.[/]")
-
-
-def _do_analyze(vod_id: str, config: "cfg.Config", *, emote: str | None) -> None:
-    """Run analysis (defaults: top 10, unwatched-only) and print the report."""
-    try:
-        result = actions.analyze(vod_id, config, emote=emote)
-    except actions.EmoteNotFound as e:
-        console.print(f"[yellow]{e}[/] Try the Top emotes view to see what's used.")
-        return
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    if result.emote and len(result.emote_matches) > 1:
-        others = "  ".join(result.emote_matches[:5])
-        console.print(
-            f"[dim]Multiple emotes match — using {result.emote}. Matches: {others}[/]"
-        )
-    an.report(result.moments, vod_id, emote=result.emote)
-
-
-def _pick_emote(vod_id: str, config: "cfg.Config") -> str | None:
-    """Autocomplete an emote name from the ones actually used in this VOD."""
-    try:
-        counts = actions.emote_counts(vod_id, config)
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return None
-    if not counts:
-        console.print("[yellow]No emotes recorded for this VOD.[/]")
-        return None
-    names = [name for name, _ in counts.most_common()]
-    answer = questionary.autocomplete(
-        "Emote to analyze (type to filter):", choices=names, match_middle=True
-    ).ask()
-    return (answer or "").strip() or None
-
-
-def _show_emotes(vod_id: str, config: "cfg.Config", top_n: int = 20) -> None:
-    try:
-        counts = actions.emote_counts(vod_id, config)
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    top = counts.most_common(top_n)
-    if not top:
-        console.print("[yellow]No emotes recorded for this VOD.[/]")
-        return
-    table = Table(title=f"Top emotes — VOD {vod_id}", box=None, title_justify="left")
-    table.add_column("emote")
-    table.add_column("uses", justify="right")
-    for name, n in top:
-        table.add_row(name, str(n))
-    console.print(table)
-
-
-def _show_watched(vod_id: str, config: "cfg.Config") -> None:
-    try:
-        watched_ranges = wt.load(vod_id, config.chat_dir)
-    except (FileNotFoundError, ValueError) as e:
-        console.print(f"[red]{e}[/]")
-        return
-    if not watched_ranges.ranges:
-        console.print("[yellow]No watched ranges recorded.[/]")
-        return
-    _render_ranges(watched_ranges.ranges, f"Watched ranges — VOD {vod_id}")
-
-
-def _render_ranges(ranges: list["wt.WatchedRange"], header: str) -> None:
-    """Print a list of watched ranges with a header and a total. Shared by the
-    saved-ranges view and the infer-from-chat preview."""
-    console.print(f"\n[bold]{header}[/]")
-    total = 0
-    for r in ranges:
-        start = an._format_timestamp(r.start_seconds)
-        end = an._format_timestamp(r.end_seconds)
-        console.print(f"  {start} – {end}  [dim]({r.source})[/]")
-        total += r.end_seconds - r.start_seconds
-    console.print(f"Total: {an._format_timestamp(total)}")
-
-
-def _print_vod(row: dict, login: str) -> None:
-    date = (row["created_at"] or "")[:10] or "unknown date"
-    dur = fetcher._format_duration(row["duration_seconds"])
-    status = []
-    if row["downloaded"]:
-        status.append("downloaded")
-    if row["watched"]:
-        status.append("watched")
-    status_str = ", ".join(status) or "not downloaded"
-    console.print(f"\n[bold]{row['title'] or '(no title)'}[/]")
-    console.print(f"[dim]{login} · {date} · {dur} · {row['id']} · {status_str}[/]")
-    console.print(f"[dim]https://twitch.tv/videos/{row['id']}[/]")
+    VodchatApp(config, streamer, offline).run()

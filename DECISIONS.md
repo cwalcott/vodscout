@@ -15,6 +15,55 @@ Format:
 
 ---
 
+## 2026-06-21 — front end: questionary shell → Textual TUI (slices 0–1)
+
+- Reversed the earlier "questionary + Rich, defer the full TUI" decision (2026-06-21
+  shell slice 0+1). The sequence-of-prompts model didn't gel: output scrolls instead
+  of holding a view, you can't see moments and emotes together, and there's no
+  persistent All/Unwatched toggle. That was exactly the "revisit if it proves
+  limiting" trigger logged at the time. Replaced questionary with a full-screen
+  **Textual** TUI; dropped the questionary dep, added textual. All interactive deps
+  stay confined to `ui.py` (legs untouched), so it was a contained swap as SPEC
+  promised.
+- UI shape (settled by mocking options with the user): **drill-in** navigation — a
+  VOD *list* screen; Enter pushes a full *VOD window* (not a master-detail split);
+  the window shows top moments (left) + emotes (right) side by side. Keys: `w`
+  All/Unwatched (drives the moment list), `f` favorite emote (pinned first), `o`
+  overall, Enter open moment link / drill emote, Esc back, `q` quit.
+- Built **stub-first** (slice 0): real layout/navigation/keybindings against a
+  throwaway `_fixtures` module, looked at it on a real terminal, then swapped each
+  fixture for the real call per slice. Cheap because in Textual the layout *is* the
+  work and is data-source-agnostic — only the fake data gets thrown away.
+- Slice 1 wired real data: list ← `vodlist.merged_vods`, moments ← `actions.analyze`,
+  emotes ← `actions.emote_counts`, emote-drill ← `actions.analyze(emote=)`. Emotes
+  were pulled into slice 1 (planned for slice 2) because the emote-drill is coupled
+  to the moments pane — leaving emotes fake would hit `EmoteNotFound` on a real VOD.
+  Toggle is instant: analyze once with `include_watched=True`, filter watched/all at
+  render time (no re-analysis per toggle). Coverage bar = `watched.load` ÷ duration.
+  Enter on a moment opens the real timestamped link via `webbrowser`.
+- Still stubbed after slice 1: favorite *persistence* (in-memory `_fixtures`) → slice
+  3 sidecar; watched-editing → slice 4. Known follow-up: `merged_vods` runs
+  synchronously on launch (brief UI freeze on slow networks) — move to a Textual
+  worker with a loading state.
+
+## 2026-06-21 — watched in the TUI: design (slice 4, not built yet)
+
+- Settled how watched will work before building it: (1) coverage in the list +
+  window header; (2) **auto-infer on first open** of a downloaded VOD with no
+  `.watched.json` when `twitch_username` is set — persist if non-empty (skip persist
+  when empty, so the VOD isn't falsely flagged as having watched data); `i` re-runs
+  it; (3) manual correction = an **inline editable text box** (`e`) prefilled with
+  current ranges one-per-line `H:MM:SS-H:MM:SS`, saved by splitting lines through
+  `watched.parse_range` → `watched.save` (source `manual`). The text box subsumes
+  add/remove/clear/split, so **no new watched-leg "carve" function is needed**.
+- Dropped the interactive timeline/scrub-marking idea (again): with text-editing as
+  the correction surface, the timeline lost its only justification (being the marking
+  surface) — consistent with the "timeline tried, passed" note below. Coverage % in
+  the header is enough.
+- Softens SPEC's "infer is a suggestion you review/confirm before saving" stance for
+  the TUI auto-on-open path only (persists silently because it's immediately visible
+  and one keystroke to edit). The CLI's `watched --infer` keeps its confirm prompt.
+
 ## 2026-06-21 — terminal timeline: tried, decided to pass
 
 - Prototyped the SPEC v1 "terminal timeline" as a one-line volume sparkline
