@@ -136,7 +136,10 @@ was tried and reverted — it read as confusing jargon):
    chosen emote spiked above *its own* normal rate. No usage threshold —
    the user picked the emote deliberately. Output per moment: timestamp,
    magnitude (× the emote's baseline) and absolute uses (a rare emote can
-   jump 9× off a tiny base without mattering, so both numbers matter).
+   jump 9× off a tiny base without mattering, so both numbers matter). The
+   `--emote` argument is resolved forgivingly against the emotes present in
+   the VOD: case-insensitive, and partial — `lmaoo` finds `LMAOOOOOOOOOO`
+   — picking the most-used match and reporting it.
 
 Emotes are central to both, so the chat log stores emote **names** (not
 IDs) — the analyzer, the `emotes` command, and reports all speak the same

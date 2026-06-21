@@ -1,3 +1,5 @@
+from collections import Counter
+
 import pytest
 
 from vodchat.analyzer import (
@@ -10,6 +12,7 @@ from vodchat.analyzer import (
     detect_emote_spikes,
     detect_spikes,
     mark_watched,
+    resolve_emote,
 )
 
 
@@ -167,6 +170,36 @@ def test_detect_emote_spikes_ignores_other_emotes():
 
     assert detect_emote_spikes(msgs, 60, "Kappa") == []
     assert len(detect_emote_spikes(msgs, 60, "PogChamp")) == 1
+
+
+# ── resolve_emote ────────────────────────────────────────────────────────────
+
+
+def test_resolve_emote_case_insensitive_exact():
+    assert resolve_emote("orange", Counter({"Orange": 10})) == ["Orange"]
+
+
+def test_resolve_emote_substring_handles_stretchy_emote():
+    counts = Counter({"LMAOOOOOOOOOO": 100})
+    assert resolve_emote("lmaoooo", counts) == ["LMAOOOOOOOOOO"]
+    assert resolve_emote("lmao", counts) == ["LMAOOOOOOOOOO"]
+    # over-typing the O's still resolves (emote name contained in the query)
+    assert resolve_emote("lmaoooooooooooooooo", counts) == ["LMAOOOOOOOOOO"]
+
+
+def test_resolve_emote_multiple_sorted_by_usage():
+    counts = Counter({"Orange": 5, "OMEGALUL": 50, "Kappa": 3})
+    # "o" is in Orange and OMEGALUL (not Kappa); most-used first
+    assert resolve_emote("o", counts) == ["OMEGALUL", "Orange"]
+
+
+def test_resolve_emote_exact_wins_over_substring():
+    counts = Counter({"lmao": 5, "LMAOOOOOOOOOO": 100})
+    assert resolve_emote("lmao", counts) == ["lmao"]
+
+
+def test_resolve_emote_no_match():
+    assert resolve_emote("zzz", Counter({"Kappa": 10})) == []
 
 
 # ── count_emotes ───────────────────────────────────────────────────────────────

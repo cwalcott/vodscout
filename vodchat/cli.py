@@ -228,7 +228,8 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
 @click.argument("vod_id")
 @click.option(
     "--emote",
-    help="Show top moments for a specific emote instead of overall chat volume.",
+    help="Top moments for one emote instead of overall chat volume "
+    "(case-insensitive, partial match — e.g. 'lmaoo' finds 'LMAOOOOOOOOOO').",
 )
 @click.option(
     "--top", "top_n", default=10, show_default=True, help="Number of moments to show."
@@ -263,6 +264,16 @@ def analyze(
         raise click.ClickException(str(e))
     messages = an.load_messages(log_path)
     if emote:
+        matches = an.resolve_emote(emote, an.count_emotes(messages))
+        if not matches:
+            raise click.ClickException(
+                f"No emote matching {emote!r} in this VOD. "
+                f"See `vodchat emotes {vod_id}` for what's used."
+            )
+        emote = matches[0]
+        if len(matches) > 1:
+            others = "  ".join(matches[:5])
+            click.echo(f"Multiple emotes match — using {emote}. Matches: {others}")
         moments = an.detect_emote_spikes(messages, config.bucket_seconds, emote)
     else:
         moments = an.detect_spikes(messages, config.bucket_seconds)

@@ -65,6 +65,20 @@ def count_emotes(messages: list[dict]) -> Counter:
     return counts
 
 
+def resolve_emote(query: str, emote_counts: Counter) -> list[str]:
+    """Resolve a user-typed emote against the emotes present in a VOD.
+
+    Forgiving matching, most-used first: a case-insensitive exact match wins
+    outright; otherwise any emote whose name contains the query (or is
+    contained by it, so over-typing repeated letters like "lmaooooo" still
+    works) matches. Returns [] if nothing matches.
+    """
+    q = query.lower()
+    exact = [e for e in emote_counts if e.lower() == q]
+    matches = exact or [e for e in emote_counts if q in e.lower() or e.lower() in q]
+    return sorted(matches, key=lambda e: emote_counts[e], reverse=True)
+
+
 def _find_runs(counts: list[float]) -> list[_Run]:
     """Flag buckets above their trailing baseline; merge adjacent flags.
 
