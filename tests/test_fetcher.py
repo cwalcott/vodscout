@@ -2,6 +2,7 @@ import pytest
 
 from vodchat.config import Config
 from vodchat.fetcher import (
+    _scan_third_party,
     _vod_id_from_url,
     downloaded_ids,
     parse_selection,
@@ -65,6 +66,22 @@ def test_parse_selection_valid(text, count, expected):
 def test_parse_selection_invalid(text, count):
     with pytest.raises(ValueError):
         parse_selection(text, count)
+
+
+@pytest.mark.parametrize(
+    "text,known,expected",
+    [
+        ("catJAM Pepega lol", {"catJAM", "Pepega"}, ["catJAM", "Pepega"]),
+        ("catJAM catJAM catJAM", {"catJAM"}, ["catJAM", "catJAM", "catJAM"]),
+        ("nothing here", {"catJAM"}, []),
+        ("", {"catJAM"}, []),
+        ("plain text only", set(), []),
+        # whole-token match only — substrings don't count
+        ("catJAMMER", {"catJAM"}, []),
+    ],
+)
+def test_scan_third_party(text, known, expected):
+    assert _scan_third_party(text, known) == expected
 
 
 def _vod(vid):

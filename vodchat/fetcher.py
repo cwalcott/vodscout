@@ -19,6 +19,16 @@ _HELIX_URL = "https://api.twitch.tv/helix"
 _OAUTH_URL = "https://id.twitch.tv/oauth2/token"
 _VOD_LIST_LIMIT = 10  # recent archives to list per streamer
 
+# Third-party emote providers. BTTV/FFZ/7TV emotes aren't in Twitch's emote
+# system, so GQL delivers them as plain text — we recognize them by name
+# against the channel's (global + channel-specific) sets, fetched once per VOD.
+_BTTV_GLOBAL = "https://api.betterttv.net/3/cached/emotes/global"
+_BTTV_USER = "https://api.betterttv.net/3/cached/users/twitch/{id}"
+_FFZ_GLOBAL = "https://api.frankerfacez.com/v1/set/global"
+_FFZ_ROOM = "https://api.frankerfacez.com/v1/room/id/{id}"
+_SEVENTV_GLOBAL = "https://7tv.io/v3/emote-sets/global"
+_SEVENTV_USER = "https://7tv.io/v3/users/twitch/{id}"
+
 
 def _vod_id_from_url(url_or_id: str) -> str:
     match = re.search(r"/videos/(\d+)", url_or_id)
@@ -44,7 +54,10 @@ def _gql_post(session: requests.Session, payload: dict) -> dict:
 
 def _video_metadata(vod_id: str) -> dict:
     payload = {
-        "query": f'query{{video(id:"{vod_id}"){{title,lengthSeconds,owner{{login}}}}}}',
+        "query": (
+            f'query{{video(id:"{vod_id}")'
+            f"{{title,lengthSeconds,owner{{id,login}}}}}}"
+        ),
         "variables": {},
     }
     with requests.Session() as session:
@@ -54,6 +67,67 @@ def _video_metadata(vod_id: str) -> dict:
     if video is None:
         raise ValueError(f"VOD {vod_id!r} not found or is not accessible.")
     return video
+
+
+def _get_json(url: str):
+    resp = requests.get(url, timeout=15)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _bttv_codes(data) -> set[str]:
+    # Global is a bare list; the user endpoint nests channel/shared emotes.
+    if isinstance(data, list):
+        emotes = data
+    else:
+        emotes = (data.get("channelEmotes") or []) + (data.get("sharedEmotes") or [])
+    return {e["code"] for e in emotes if e.get("code")}
+
+
+def _ffz_names(data) -> set[str]:
+    names: set[str] = set()
+    for emote_set in (data.get("sets") or {}).values():
+        for e in emote_set.get("emoticons") or []:
+            if e.get("name"):
+                names.add(e["name"])
+    return names
+
+
+def _seventv_names(data) -> set[str]:
+    # Global is an emote-set object; the user endpoint wraps it in emote_set.
+    emote_set = data.get("emote_set") if "emote_set" in data else data
+    emotes = (emote_set or {}).get("emotes") or []
+    return {e["name"] for e in emotes if e.get("name")}
+
+
+def _third_party_emotes(user_id: str) -> set[str]:
+    """Names of all BTTV/FFZ/7TV emotes available in the channel (+ globals).
+
+    Each source is fetched independently and best-effort: a provider being
+    down — or, very commonly, not having this channel registered (the
+    channel endpoint 404s) — must not drop the other sources, including that
+    provider's globals, nor break the chat download.
+    """
+    sources = [
+        (_BTTV_GLOBAL, _bttv_codes),
+        (_BTTV_USER.format(id=user_id), _bttv_codes),
+        (_FFZ_GLOBAL, _ffz_names),
+        (_FFZ_ROOM.format(id=user_id), _ffz_names),
+        (_SEVENTV_GLOBAL, _seventv_names),
+        (_SEVENTV_USER.format(id=user_id), _seventv_names),
+    ]
+    names: set[str] = set()
+    for url, extract in sources:
+        try:
+            names |= extract(_get_json(url))
+        except Exception:
+            pass
+    return names
+
+
+def _scan_third_party(text: str, known: set[str]) -> list[str]:
+    """Whitespace-split tokens of `text` that are known third-party emotes."""
+    return [tok for tok in text.split() if tok in known]
 
 
 def _chat_payload(vod_id: str, *, offset: int = 0, cursor: str | None = None) -> dict:
@@ -69,8 +143,11 @@ def _chat_payload(vod_id: str, *, offset: int = 0, cursor: str | None = None) ->
     }
 
 
-def _iter_messages(session: requests.Session, vod_id: str):
+def _iter_messages(
+    session: requests.Session, vod_id: str, third_party: set[str] | None = None
+):
     """Yield msg dicts for every chat message in the VOD."""
+    third_party = third_party or set()
     cursor: str | None = None
     null_streak = 0
 
@@ -94,7 +171,13 @@ def _iter_messages(session: requests.Session, vod_id: str):
                 continue  # deleted account
             frags = node["message"]["fragments"]
             text = "".join(f["text"] for f in frags if f.get("text"))
-            emotes = [f["emote"]["emoteID"] for f in frags if f.get("emote")]
+            # Store emote names (the fragment text), not IDs: per-emote spike
+            # detection, the `emotes` exploration command, and future favorites
+            # are all name-facing. Names join directly with what the user reads
+            # in the report; IDs would need a separate persisted lookup table.
+            emotes = [f["text"] for f in frags if f.get("emote")]
+            # Third-party emotes arrive as plain text — match them by name.
+            emotes += _scan_third_party(text, third_party)
             msg: dict = {
                 "time": node["contentOffsetSeconds"],
                 "user": node["commenter"]["login"],
@@ -116,6 +199,9 @@ def fetch_by_url(url: str, config: Config) -> Path:
     streamer = meta["owner"]["login"]
     duration = meta.get("lengthSeconds") or None
 
+    owner_id = meta["owner"].get("id")
+    third_party = _third_party_emotes(owner_id) if owner_id else set()
+
     out_dir = config.chat_dir / streamer
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{vod_id}.txt"
@@ -136,7 +222,7 @@ def fetch_by_url(url: str, config: Config) -> Path:
             with requests.Session() as session:
                 session.headers["Client-ID"] = _CHAT_CLIENT_ID
                 with tmp_path.open("w") as f:
-                    for msg in _iter_messages(session, vod_id):
+                    for msg in _iter_messages(session, vod_id, third_party):
                         f.write(json.dumps(msg, ensure_ascii=False) + "\n")
                         count += 1
                         if duration:
