@@ -71,6 +71,24 @@ def emote_counts(vod_id: str, config: "cfg.Config") -> Counter:
     return analyzer.count_emotes(analyzer.load_messages(log_path))
 
 
+def add_ranges(
+    vod_id: str,
+    config: "cfg.Config",
+    ranges: list["watched.WatchedRange"],
+) -> "watched.WatchedRanges":
+    """Merge new watched ranges into a VOD's existing ones and persist.
+
+    Loads current ranges, extends with `ranges`, and saves — save() sorts and
+    merges overlaps, so the result is normalized. Shared by the CLI's
+    `watched --add` / `--infer` and the shell's add-range action. Returns the
+    saved (normalized) WatchedRanges.
+    """
+    current = watched.load(vod_id, config.chat_dir)
+    current.ranges.extend(ranges)
+    watched.save(current, vod_id, config.chat_dir)
+    return current
+
+
 def delete_vod(vod_id: str, config: "cfg.Config") -> list[Path]:
     """Delete a VOD's chat log and its sidecars (.meta.json, .watched.json).
 

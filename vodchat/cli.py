@@ -237,15 +237,13 @@ def watched(
             click.edit(filename=str(path))
             wt.load(vod_id, chat_dir)  # validate it still parses
         elif add_spec:
-            current = wt.load(vod_id, chat_dir)
             try:
                 new_range = wt.parse_range(
                     add_spec, end_resolver=lambda: wt.vod_end_seconds(vod_id, chat_dir)
                 )
             except ValueError as e:
                 raise click.BadParameter(str(e), param_hint="--add")
-            current.ranges.append(new_range)
-            wt.save(current, vod_id, chat_dir)
+            actions.add_ranges(vod_id, config, [new_range])
         elif infer:
             username = username or config.twitch_username
             if not username:
@@ -263,9 +261,7 @@ def watched(
             click.echo("Suggested ranges from your chat activity:")
             _print_ranges(wt.WatchedRanges(suggested, ""))
             if click.confirm("Merge these into the watched ranges?", default=True):
-                current = wt.load(vod_id, chat_dir)
-                current.ranges.extend(suggested)
-                wt.save(current, vod_id, chat_dir)
+                actions.add_ranges(vod_id, config, suggested)
             else:
                 click.echo("Discarded.")
                 return

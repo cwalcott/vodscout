@@ -104,6 +104,14 @@ Format:
 - Drive-by: `analyzer.find_log`'s "not found" message still said `vodchat fetch --url` (renamed to `vodchat vods --url` when fetch+list merged). Fixed.
 - Tests: `delete_vod` (removes all sidecars + returns paths, only-existing-sidecars, missing-log raises) and `watched.clear` (removes file + load-treats-missing-as-empty, idempotent false). Verified the `delete`/`--clear` CLI wiring end-to-end with a CliRunner smoke test.
 
+## 2026-06-21 — interactive shell: watched submenu (manual add)
+
+- "Watched ranges" in the VOD view is now a submenu (View / Add a manual range / Clear all / Back) instead of a one-shot view, and "Clear" moved off the top-level VOD menu into it — all watched operations grouped in one place. Closes the gap that the shell could previously only *list* watched ranges, not edit them.
+- Scope (per user): manual add only. Infer-from-chat and `$EDITOR` editing were offered but not chosen for the shell — they stay CLI-only (`watched --infer` / `--edit`). Add reuses `watched.parse_range` (so the shell accepts the same `START-END` / open-ended forms, incl. `…-end` resolved via `vod_end_seconds`).
+- New shared `actions.add_ranges(vod_id, config, ranges)` = load → extend → save (save normalizes/merges). Both the shell's add action AND the CLI's `watched --add` / `--infer` merge step now go through it, removing the duplicated load/append/save dance from cli.
+- The submenu propagates `q` (quit-shell) up through `_vod_view` so the "q quits the shell from anywhere" rule holds one level deeper; plain Back returns to the VOD view.
+- Test: `actions.add_ranges` (overlapping ranges merge on save + persist). CLI `watched --add` smoke-tested through the refactor.
+
 ## 2026-06-21 — docs sync + removed dead `downloader` config
 
 - Doc cleanup pass: SPEC.md/CLAUDE.md still described the dual-backend (`chat-downloader`/`TwitchDownloaderCLI`) chat-download plan that was dropped 2026-06-20 for direct GQL; the command sketch still listed the interactive `watched` editor and the removed `analyze <streamer> --all`; the gap-threshold default still read "8–10 min" (now 180s) and an open question still mentioned a "spike multiplier" (now top-N). All brought in line with the code.

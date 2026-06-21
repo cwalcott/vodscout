@@ -110,3 +110,17 @@ def test_delete_vod_only_removes_existing_sidecars(config):
 def test_delete_vod_missing_raises(config):
     with pytest.raises(FileNotFoundError):
         actions.delete_vod("999", config)
+
+
+def test_add_ranges_merges_and_persists(config):
+    _write_log(config.chat_dir, "shroud", "111", _spiky_messages())
+    actions.add_ranges("111", config, [WatchedRange(0, 600, "manual")])
+    # A second, overlapping range merges with the first on save.
+    result = actions.add_ranges("111", config, [WatchedRange(300, 1200, "manual")])
+    assert result.ranges == [WatchedRange(0, 1200, "manual")]
+    # Persisted: a fresh load sees the merged range.
+    from vodchat import watched
+
+    assert watched.load("111", config.chat_dir).ranges == [
+        WatchedRange(0, 1200, "manual")
+    ]

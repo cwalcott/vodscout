@@ -6,9 +6,9 @@ questionary/Rich interaction lives here so the rest of the package carries no
 interactive-UI dependency. Built on questionary (prompts) + Rich (rendering).
 
 Session state is just two things: the current streamer (its merged VOD list)
-and the selected VOD. The per-VOD view runs the read-only analyses (analyze /
-analyze-emote / top emotes / watched view) via the shared `actions` module;
-downloading and deleting get wired in a later slice.
+and the selected VOD. The per-VOD view drives the full set of actions through
+the shared `actions`/`vodlist` modules: analyze (overall + per-emote), top
+emotes, watched ranges (view / add / clear), download, and delete.
 """
 
 import questionary
@@ -137,13 +137,9 @@ def _vod_view(row: dict, login: str, config: "cfg.Config") -> str:
                 questionary.Choice("Analyze (chat volume)", value="analyze"),
                 questionary.Choice("Analyze an emote…", value="emote"),
                 questionary.Choice("Top emotes", value="emotes"),
-                questionary.Choice("Watched ranges", value="watched"),
+                questionary.Choice("Watched ranges…", value="watched"),
+                questionary.Choice("Delete VOD…", value="delete"),
             ]
-            if row["watched"]:
-                choices.append(
-                    questionary.Choice("Clear watched ranges", value="clear")
-                )
-            choices.append(questionary.Choice("Delete VOD…", value="delete"))
         else:
             choices = [questionary.Choice("Download chat", value="download")]
         choices += [
@@ -165,8 +161,9 @@ def _vod_view(row: dict, login: str, config: "cfg.Config") -> str:
             if _delete(row, config):
                 return _BACK  # files are gone — re-merge the list
             continue
-        if action == "clear":
-            _clear_watched(row, config)
+        if action == "watched":
+            if _watched_menu(row, config) == _QUIT:
+                return _QUIT
             continue
         _run_action(action, row["id"], config)
 
@@ -180,8 +177,52 @@ def _run_action(action: str, vod_id: str, config: "cfg.Config") -> None:
             _do_analyze(vod_id, config, emote=emote)
     elif action == "emotes":
         _show_emotes(vod_id, config)
-    elif action == "watched":
-        _show_watched(vod_id, config)
+
+
+def _watched_menu(row: dict, config: "cfg.Config") -> str:
+    """Submenu for one VOD's watched ranges. Returns _QUIT to exit the shell."""
+    while True:
+        choices = [
+            questionary.Choice("View ranges", value="view"),
+            questionary.Choice("Add a manual range", value="add"),
+        ]
+        if row["watched"]:
+            choices.append(questionary.Choice("Clear all ranges", value="clear"))
+        choices += [
+            questionary.Separator(),
+            questionary.Choice("Back", value=_BACK),
+        ]
+        action = _select("Watched ranges:", choices)
+        if action == _QUIT:
+            return _QUIT
+        if action is None or action == _BACK:
+            return _BACK
+        if action == "view":
+            _show_watched(row["id"], config)
+        elif action == "add":
+            _add_watched(row, config)
+        elif action == "clear":
+            _clear_watched(row, config)
+
+
+def _add_watched(row: dict, config: "cfg.Config") -> None:
+    """Prompt for a START-END range and merge it into the VOD's watched ranges."""
+    spec = questionary.text("Range to add (START-END, e.g. 1:00:00-1:30:00):").ask()
+    if not spec or not spec.strip():
+        return
+    try:
+        new_range = wt.parse_range(
+            spec,
+            end_resolver=lambda: wt.vod_end_seconds(row["id"], config.chat_dir),
+        )
+    except (ValueError, FileNotFoundError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    actions.add_ranges(row["id"], config, [new_range])
+    row["watched"] = True
+    start = an._format_timestamp(new_range.start_seconds)
+    end = an._format_timestamp(new_range.end_seconds)
+    console.print(f"[green]Added {start} – {end} (manual).[/]")
 
 
 def _download(vod_id: str, config: "cfg.Config") -> bool:
