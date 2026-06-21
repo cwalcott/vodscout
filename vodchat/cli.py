@@ -18,109 +18,109 @@ def main(ctx: click.Context) -> None:
 
 @main.command()
 @click.argument("streamer", required=False)
-@click.option("--url", help="VOD URL or ID (no credentials required).")
-@click.option("--all", "fetch_all", is_flag=True, help="Fetch all undownloaded VODs.")
+@click.option("--url", help="Download one VOD by URL or ID, then exit.")
+@click.option(
+    "--all", "get_all", is_flag=True, help="Download every not-yet-downloaded VOD."
+)
+@click.option(
+    "--get",
+    "get_sel",
+    metavar="N[,N...]",
+    help="Download VODs by their list number (e.g. 1,3 / all).",
+)
+@click.option(
+    "-i",
+    "--pick",
+    "interactive",
+    is_flag=True,
+    help="Prompt to choose what to download.",
+)
+@click.option(
+    "--offline", is_flag=True, help="Don't query Twitch; show local downloads only."
+)
 @click.pass_context
-def fetch(
-    ctx: click.Context, streamer: str | None, url: str | None, fetch_all: bool
+def vods(
+    ctx: click.Context,
+    streamer: str | None,
+    url: str | None,
+    get_all: bool,
+    get_sel: str | None,
+    interactive: bool,
+    offline: bool,
 ) -> None:
-    """Download chat for a VOD."""
+    """Browse a streamer's VODs and download their chat.
+
+    Lists your downloads merged with recent VODs on Twitch (newest first,
+    tagged [downloaded]/[watched]). Your downloads are the source of truth and
+    are always shown — even if a VOD has aged off or been removed from Twitch.
+
+    Listing is read-only; download with --all, --get <n>, --pick, or --url.
+    """
     config = ctx.obj["config"]
 
     if url:
-        try:
-            out_path = fetcher.fetch_by_url(url, config)
-            click.echo(f"Saved to {out_path}")
-        except FileExistsError as e:
-            click.echo(str(e))
-        except Exception as e:
-            raise click.ClickException(str(e))
-    elif streamer:
-        _fetch_by_streamer(streamer, config, fetch_all)
-    else:
-        raise click.UsageError("Provide a VOD --url or a streamer name.")
+        _download_one(url, config)
+        return
+    if not streamer:
+        raise click.UsageError("Provide a streamer name, or --url <vod>.")
 
+    downloading = get_all or bool(get_sel) or interactive
+    if offline and downloading:
+        raise click.UsageError(
+            "--offline only lists; drop it to download (--all / --get / --pick)."
+        )
 
-def _fetch_by_streamer(streamer: str, config: "cfg.Config", fetch_all: bool) -> None:
-    """Discover a streamer's VODs via Twitch's GQL endpoint, pick, and download."""
-    try:
-        videos = fetcher.list_remote_vods(streamer)
-    except ValueError as e:
-        raise click.ClickException(str(e))
+    ordered, login, note = _vod_list(streamer, config, offline)
+    if not ordered:
+        raise click.ClickException(note or f"No downloaded VODs for {streamer!r}.")
 
-    if not videos:
-        click.echo(f"No archived VODs found for {streamer!r}.")
+    _render(ordered, login)
+    if note:
+        click.echo(note)
+
+    if not downloading:
+        avail = sum(1 for r in ordered if not r["downloaded"])
+        if avail and not offline:
+            click.echo(
+                f"({avail} not downloaded — grab with --all, --get <n>, or --pick)"
+            )
         return
 
-    login = videos[0]["user_login"]
-    have = fetcher.downloaded_ids(login, config)
-    if have.issuperset(v["id"] for v in videos):
-        click.echo(f"All recent VODs for {login} are already downloaded.")
-        return
-
-    if fetch_all:
-        # Non-interactive: only the new ones, silently skipping what's on disk.
-        chosen = [v for v in videos if v["id"] not in have]
-    else:
-        # Show the whole recent timeline; mark (and dim) what's already on disk
-        # so the numbering matches what the user sees on Twitch, instead of
-        # silently dropping downloaded VODs and looking like it missed them.
-        suffix = f" ({len(have & {v['id'] for v in videos})} already downloaded)"
-        click.echo(f"Recent VODs for {login}{suffix}:")
-        for i, v in enumerate(videos, 1):
-            date = v["created_at"][:10]
-            dur = fetcher._format_duration(v["duration_seconds"])
-            row = f"  {i:>2}. {date}  {dur:>9}  {v['title']}"
-            if v["id"] in have:
-                row = click.style(f"{row}  [downloaded]", dim=True)
-            click.echo(row)
-        selection = click.prompt(
-            "Fetch which? (e.g. 1,3 / all / blank to cancel)",
+    # Interactive pick fills in --get from a prompt (skipped if --all/--get given).
+    if interactive and not (get_all or get_sel):
+        get_sel = click.prompt(
+            "Download which? (e.g. 1,3 / all / blank to skip)",
             default="",
             show_default=False,
         )
+
+    if get_all:
+        chosen = [r for r in ordered if not r["downloaded"]]
+    else:
         try:
-            indices = fetcher.parse_selection(selection, len(videos))
+            indices = fetcher.parse_selection(get_sel or "", len(ordered))
         except ValueError as e:
-            raise click.BadParameter(str(e))
-        if not indices:
-            click.echo("Nothing selected.")
-            return
-        # "all" (and explicit picks of downloaded rows) skip what's on disk.
-        chosen = [videos[i] for i in indices if videos[i]["id"] not in have]
-        if not chosen:
-            click.echo("Nothing to fetch (all selected VODs already downloaded).")
-            return
+            hint = None if interactive else "--get"
+            raise click.BadParameter(str(e), param_hint=hint)
+        # Picking a downloaded row is a no-op — skip what's already on disk.
+        chosen = [ordered[i] for i in indices if not ordered[i]["downloaded"]]
 
-    for v in chosen:
-        try:
-            out_path = fetcher.fetch_by_url(v["id"], config)
-            click.echo(f"Saved to {out_path}")
-        except FileExistsError as e:
-            click.echo(str(e))
-        except Exception as e:
-            # One bad VOD shouldn't abort the rest of the batch.
-            click.echo(f"Failed {v['id']}: {e}")
+    if not chosen:
+        click.echo("Nothing to download.")
+        return
+    _download_many(chosen, config)
 
 
-@main.command("list")
-@click.argument("streamer")
-@click.option(
-    "--offline", is_flag=True, help="Don't query Twitch; show only local downloads."
-)
-@click.pass_context
-def list_vods(ctx: click.Context, streamer: str, offline: bool) -> None:
-    """List a streamer's VODs: your downloads, plus recent VODs on Twitch.
+def _vod_list(
+    streamer: str, config: "cfg.Config", offline: bool
+) -> tuple[list[dict], str, str | None]:
+    """Merge local downloads (source of truth) with Twitch's recent VODs.
 
-    Your local downloads are the source of truth and are always shown — even if
-    a VOD has aged off or been removed from Twitch. Unless --offline is given,
-    Twitch is also checked for recent VODs, so newly-available ones you haven't
-    grabbed appear alongside what you have.
+    Returns (rows newest-first, resolved login, note). Local downloads are never
+    dropped; the remote check only adds new VODs and tops up metadata. A remote
+    failure is reported via `note`, not raised — local rows still come back.
     """
-    config = ctx.obj["config"]
     streamer_dir = config.chat_dir / streamer
-
-    # Local downloads are the spine: keyed by VOD id, never dropped.
     rows: dict[str, dict] = {}
     for v in fetcher.local_vods(streamer, config):
         rows[v["id"]] = {
@@ -137,7 +137,6 @@ def list_vods(ctx: click.Context, streamer: str, offline: bool) -> None:
                 login = v["user_login"]
                 existing = rows.get(v["id"])
                 if existing:
-                    # Top up local rows with fresh remote metadata.
                     existing.update(
                         title=v["title"],
                         created_at=v["created_at"],
@@ -150,19 +149,16 @@ def list_vods(ctx: click.Context, streamer: str, offline: bool) -> None:
         except Exception as e:  # offline / network failure — local still shows
             note = f"Couldn't reach Twitch ({e})."
 
-    if not rows:
-        raise click.ClickException(
-            note or f"No downloaded VODs for {streamer!r}."
-        )
-
-    # Newest first by publish date; fall back to numeric id (ids grow over time).
     def sort_key(r: dict) -> tuple[str, int]:
         return (r["created_at"] or "", int(r["id"]) if r["id"].isdigit() else 0)
 
-    ordered = sorted(rows.values(), key=sort_key, reverse=True)
+    return sorted(rows.values(), key=sort_key, reverse=True), login, note
+
+
+def _render(ordered: list[dict], login: str) -> None:
     n_down = sum(1 for r in ordered if r["downloaded"])
     click.echo(f"{login} — {len(ordered)} VOD(s), {n_down} downloaded")
-    for r in ordered:
+    for i, r in enumerate(ordered, 1):
         date = (r["created_at"] or "")[:10] or "??????????"
         dur = fetcher._format_duration(r["duration_seconds"])
         tags = ""
@@ -170,9 +166,31 @@ def list_vods(ctx: click.Context, streamer: str, offline: bool) -> None:
             tags += " [downloaded]"
         if r["watched"]:
             tags += " [watched]"
-        click.echo(f"  {date}  {dur:>9}  {r['id']}  {r['title']}{tags}")
-    if note:
-        click.echo(note)
+        row = f"  {i:>2}. {date}  {dur:>9}  {r['id']}  {r['title']}{tags}"
+        # Dim already-downloaded rows so the not-yet-grabbed ones stand out.
+        click.echo(click.style(row, dim=True) if r["downloaded"] else row)
+
+
+def _download_one(url: str, config: "cfg.Config") -> None:
+    try:
+        out_path = fetcher.fetch_by_url(url, config)
+        click.echo(f"Saved to {out_path}")
+    except FileExistsError as e:
+        click.echo(str(e))
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+
+def _download_many(videos: list[dict], config: "cfg.Config") -> None:
+    for v in videos:
+        try:
+            out_path = fetcher.fetch_by_url(v["id"], config)
+            click.echo(f"Saved to {out_path}")
+        except FileExistsError as e:
+            click.echo(str(e))
+        except Exception as e:
+            # One bad VOD shouldn't abort the rest of the batch.
+            click.echo(f"Failed {v['id']}: {e}")
 
 
 @main.command()

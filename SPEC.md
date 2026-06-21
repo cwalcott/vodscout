@@ -211,11 +211,12 @@ with different highlighted intervals.
 ## Commands (rough sketch, not final)
 
 ```
-vodchat fetch --url <vod-url>          # download chat for one VOD
-vodchat fetch <streamer>               # list/pick recent VODs (no credentials)
-vodchat fetch <streamer> --all         # download all undownloaded, no prompt
-vodchat list <streamer>                # your downloads + recent Twitch VODs, merged
-vodchat list <streamer> --offline      # local downloads only, no Twitch call
+vodchat vods <streamer>                # browse: your downloads + recent Twitch VODs, merged
+vodchat vods <streamer> --offline      # browse local downloads only, no Twitch call
+vodchat vods <streamer> --all          # download all not-yet-downloaded VODs
+vodchat vods <streamer> --get 1,3      # download those rows from the list
+vodchat vods <streamer> --pick         # list, then prompt for which to download
+vodchat vods --url <vod-url>           # download one VOD by URL/ID
 vodchat emotes <vod-id>                # top emotes for one VOD
 vodchat emotes <streamer>              # top emotes across a streamer's VODs
 vodchat watched <vod-id>                # interactive watched-range editor
