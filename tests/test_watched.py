@@ -87,6 +87,21 @@ def test_disjoint_ranges_stay_separate_and_sorted(chat_dir):
     ]
 
 
+# ── clear ─────────────────────────────────────────────────────────────────────
+
+
+def test_clear_removes_file_and_returns_true(chat_dir):
+    watched.save(WatchedRanges([WatchedRange(0, 60, "manual")], ""), "12345", chat_dir)
+    assert watched.clear("12345", chat_dir) is True
+    assert not (chat_dir / "shroud" / "12345.watched.json").exists()
+    # load() treats the now-missing file as empty, not an error.
+    assert watched.load("12345", chat_dir).ranges == []
+
+
+def test_clear_no_file_returns_false(chat_dir):
+    assert watched.clear("12345", chat_dir) is False
+
+
 def test_manual_wins_when_merging_mixed_sources(chat_dir):
     w = WatchedRanges(
         ranges=[

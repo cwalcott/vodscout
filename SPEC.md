@@ -264,8 +264,10 @@ vodchat watched <vod-id>                # show watched ranges
 vodchat watched <vod-id> --add 1:00:00-1:30:00   # add a manual range
 vodchat watched <vod-id> --infer        # suggest ranges from your own chat
 vodchat watched <vod-id> --edit         # edit the ranges file in $EDITOR
+vodchat watched <vod-id> --clear        # remove all watched ranges
 vodchat analyze <vod-id>                # top moments by chat volume (+ top emotes)
 vodchat analyze <vod-id> --emote <name> # top moments for one emote
+vodchat delete <vod-id>                 # delete a VOD's chat log + sidecars (-y skips confirm)
 ```
 
 ## Explicitly out of scope (for now)

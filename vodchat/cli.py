@@ -202,6 +202,12 @@ def _download_many(videos: list[dict], config: "cfg.Config") -> None:
     help="Silence (seconds) that splits sessions for --infer "
     "(overrides config; default 180). Lower = more, shorter ranges.",
 )
+@click.option(
+    "--clear",
+    "clear_ranges",
+    is_flag=True,
+    help="Remove all watched ranges for this VOD.",
+)
 @click.pass_context
 def watched(
     ctx: click.Context,
@@ -211,12 +217,19 @@ def watched(
     infer: bool,
     username: str | None,
     gap_seconds: int | None,
+    clear_ranges: bool,
 ) -> None:
     """View or edit watched ranges for a VOD."""
     config = ctx.obj["config"]
     chat_dir = config.chat_dir
 
     try:
+        if clear_ranges:
+            if wt.clear(vod_id, chat_dir):
+                click.echo(f"Cleared watched ranges for VOD {vod_id}.")
+            else:
+                click.echo("No watched ranges to clear.")
+            return
         if edit_file:
             path = wt._watched_path(vod_id, chat_dir)
             if not path.exists():
@@ -275,6 +288,28 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
         click.echo(f"  {start} – {end}  ({r.source})")
         total += r.end_seconds - r.start_seconds
     click.echo(f"Total watched: {an._format_timestamp(total)}")
+
+
+@main.command()
+@click.argument("vod_id")
+@click.option("-y", "--yes", is_flag=True, help="Skip the confirmation prompt.")
+@click.pass_context
+def delete(ctx: click.Context, vod_id: str, yes: bool) -> None:
+    """Delete a VOD's chat log and its sidecars (.meta.json, .watched.json)."""
+    config = ctx.obj["config"]
+    try:
+        streamer, _log = an.find_log(vod_id, config.chat_dir)
+    except (FileNotFoundError, ValueError) as e:
+        raise click.ClickException(str(e))
+
+    if not yes and not click.confirm(
+        f"Delete all local files for VOD {vod_id} ({streamer})?"
+    ):
+        click.echo("Cancelled.")
+        return
+
+    removed = actions.delete_vod(vod_id, config)
+    click.echo(f"Deleted {len(removed)} file(s) for VOD {vod_id}.")
 
 
 @main.command()

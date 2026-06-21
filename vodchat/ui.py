@@ -25,6 +25,7 @@ console = Console()
 # Sentinel selection values, distinct from any row index.
 _QUIT = "__quit__"
 _BACK = "__back__"
+_DL_ALL = "__dl_all__"
 
 # Longest VOD title shown in the list before truncating with an ellipsis.
 _TITLE_MAX = 45
@@ -82,12 +83,23 @@ def _streamer_view(streamer: str, config: "cfg.Config", offline: bool) -> None:
 
         choices = [_vod_choice(i, r) for i, r in enumerate(rows)]
         choices.append(questionary.Separator())
+        undownloaded = [r for r in rows if not r["downloaded"]]
+        if undownloaded:
+            choices.append(
+                questionary.Choice(
+                    f"⬇ Download all not-downloaded ({len(undownloaded)})",
+                    value=_DL_ALL,
+                )
+            )
         choices.append(questionary.Choice("Quit", value=_QUIT))
 
         selected = _select("Select a VOD:", choices)
         # None = Ctrl-C / Esc; treat like Quit.
         if selected is None or selected == _QUIT:
             return
+        if selected == _DL_ALL:
+            _download_all(undownloaded, config)
+            continue
         if _vod_view(rows[selected], login, config) == _QUIT:
             return
 
@@ -113,25 +125,29 @@ def _vod_choice(index: int, row: dict) -> "questionary.Choice":
 
 
 def _vod_view(row: dict, login: str, config: "cfg.Config") -> str:
-    """Detail + action menu for one VOD. Loops so several analyses can be run.
+    """Detail + action menu for one VOD. Loops so several actions can be run.
 
     Returns _BACK to return to the list or _QUIT to exit the shell. Analyses
-    need the chat log, so they're offered only for downloaded VODs.
+    need the chat log, so a not-yet-downloaded VOD only offers Download.
     """
     while True:
         _print_vod(row, login)
-        choices = []
         if row["downloaded"]:
-            choices += [
+            choices = [
                 questionary.Choice("Analyze (chat volume)", value="analyze"),
                 questionary.Choice("Analyze an emote…", value="emote"),
                 questionary.Choice("Top emotes", value="emotes"),
                 questionary.Choice("Watched ranges", value="watched"),
-                questionary.Separator(),
             ]
+            if row["watched"]:
+                choices.append(
+                    questionary.Choice("Clear watched ranges", value="clear")
+                )
+            choices.append(questionary.Choice("Delete VOD…", value="delete"))
         else:
-            console.print("[dim](download this VOD to analyze it — coming soon)[/]")
+            choices = [questionary.Choice("Download chat", value="download")]
         choices += [
+            questionary.Separator(),
             questionary.Choice("Back to list", value=_BACK),
             questionary.Choice("Quit", value=_QUIT),
         ]
@@ -141,6 +157,17 @@ def _vod_view(row: dict, login: str, config: "cfg.Config") -> str:
             return _BACK
         if action == _QUIT:
             return _QUIT
+        if action == "download":
+            if _download(row["id"], config):
+                row["downloaded"] = True  # unlock the analysis actions in place
+            continue
+        if action == "delete":
+            if _delete(row, config):
+                return _BACK  # files are gone — re-merge the list
+            continue
+        if action == "clear":
+            _clear_watched(row, config)
+            continue
         _run_action(action, row["id"], config)
 
 
@@ -155,6 +182,61 @@ def _run_action(action: str, vod_id: str, config: "cfg.Config") -> None:
         _show_emotes(vod_id, config)
     elif action == "watched":
         _show_watched(vod_id, config)
+
+
+def _download(vod_id: str, config: "cfg.Config") -> bool:
+    """Download one VOD's chat. Returns True if it's now on disk."""
+    try:
+        out_path = fetcher.fetch_by_url(vod_id, config)
+        console.print(f"[green]Saved {out_path}[/]")
+        return True
+    except FileExistsError as e:
+        console.print(f"[yellow]{e}[/]")
+        return True  # already downloaded counts as on-disk
+    except Exception as e:
+        console.print(f"[red]Failed to download {vod_id}: {e}[/]")
+        return False
+
+
+def _download_all(rows: list[dict], config: "cfg.Config") -> None:
+    if not rows:
+        return
+    if not questionary.confirm(
+        f"Download chat for {len(rows)} VOD(s)?", default=True
+    ).ask():
+        return
+    for r in rows:
+        _download(r["id"], config)
+
+
+def _delete(row: dict, config: "cfg.Config") -> bool:
+    """Confirm and delete a VOD's local files. Returns True if deleted."""
+    vod_id = row["id"]
+    if not questionary.confirm(
+        f"Delete all local files for VOD {vod_id}?", default=False
+    ).ask():
+        console.print("Cancelled.")
+        return False
+    try:
+        removed = actions.delete_vod(vod_id, config)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return False
+    console.print(f"[green]Deleted {len(removed)} file(s) for VOD {vod_id}.[/]")
+    return True
+
+
+def _clear_watched(row: dict, config: "cfg.Config") -> None:
+    try:
+        cleared = wt.clear(row["id"], config.chat_dir)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    if cleared:
+        row["watched"] = False
+        console.print("[green]Cleared watched ranges.[/]")
+    else:
+        console.print("[yellow]No watched ranges to clear.[/]")
 
 
 def _do_analyze(vod_id: str, config: "cfg.Config", *, emote: str | None) -> None:

@@ -87,6 +87,20 @@ def save(watched: WatchedRanges, vod_id: str, chat_dir: Path) -> None:
     watched.ranges = merged
 
 
+def clear(vod_id: str, chat_dir: Path) -> bool:
+    """Delete a VOD's watched-range file. Returns True if one was removed.
+
+    Clearing means "no watched data recorded" — load() treats a missing file as
+    empty ranges, so removing it returns the VOD to its pristine state. Raises
+    FileNotFoundError if the chat log itself is missing (via _watched_path).
+    """
+    path = _watched_path(vod_id, chat_dir)
+    if path.exists():
+        path.unlink()
+        return True
+    return False
+
+
 def _parse_timestamp(s: str) -> int:
     """Parse 'H:MM:SS', 'MM:SS', or a raw integer-seconds string to seconds."""
     s = s.strip()

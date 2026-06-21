@@ -84,3 +84,29 @@ def test_emote_counts(config):
     counts = actions.emote_counts("111", config)
     assert counts["A"] == 2
     assert counts["B"] == 1
+
+
+def test_delete_vod_removes_log_and_sidecars(config):
+    _write_log(config.chat_dir, "shroud", "111", _spiky_messages())
+    streamer_dir = config.chat_dir / "shroud"
+    (streamer_dir / "111.meta.json").write_text("{}")
+    save(WatchedRanges([WatchedRange(0, 60, "manual")], ""), "111", config.chat_dir)
+
+    removed = actions.delete_vod("111", config)
+
+    assert len(removed) == 3
+    assert not (streamer_dir / "111.txt").exists()
+    assert not (streamer_dir / "111.meta.json").exists()
+    assert not (streamer_dir / "111.watched.json").exists()
+
+
+def test_delete_vod_only_removes_existing_sidecars(config):
+    # Log with no sidecars -> only the .txt is removed.
+    _write_log(config.chat_dir, "shroud", "111", _spiky_messages())
+    removed = actions.delete_vod("111", config)
+    assert len(removed) == 1
+
+
+def test_delete_vod_missing_raises(config):
+    with pytest.raises(FileNotFoundError):
+        actions.delete_vod("999", config)

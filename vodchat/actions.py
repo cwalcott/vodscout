@@ -9,6 +9,7 @@ prompts; callers own all I/O and error display.
 
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 
 from vodchat import analyzer, watched
 from vodchat import config as cfg
@@ -68,3 +69,25 @@ def emote_counts(vod_id: str, config: "cfg.Config") -> Counter:
     """Per-emote usage counts for one VOD. Raises if the chat log isn't found."""
     _streamer, log_path = analyzer.find_log(vod_id, config.chat_dir)
     return analyzer.count_emotes(analyzer.load_messages(log_path))
+
+
+def delete_vod(vod_id: str, config: "cfg.Config") -> list[Path]:
+    """Delete a VOD's chat log and its sidecars (.meta.json, .watched.json).
+
+    Returns the paths actually removed (sidecars may not all exist). Raises
+    FileNotFoundError if the VOD isn't downloaded, ValueError if its id is
+    ambiguous across streamers — both via find_log.
+    """
+    _streamer, log_path = analyzer.find_log(vod_id, config.chat_dir)
+    streamer_dir = log_path.parent
+    candidates = [
+        log_path,
+        streamer_dir / f"{vod_id}.meta.json",
+        streamer_dir / f"{vod_id}.watched.json",
+    ]
+    removed = []
+    for path in candidates:
+        if path.exists():
+            path.unlink()
+            removed.append(path)
+    return removed

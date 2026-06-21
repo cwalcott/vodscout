@@ -94,6 +94,16 @@ Format:
 - Analyze options in the shell use defaults only (top 10, unwatched-only) — no per-run prompts for count/include-watched, to keep it a single keypress. The CLI still exposes `--top`/`--include-watched` for control.
 - Tests: `test_actions.py` covers `analyze` (overall, per-emote, watched-filter default + opt-in, missing log, EmoteNotFound) and `emote_counts`. `ui` rendering stays untested (needs a TTY), consistent with `cli`.
 
+## 2026-06-21 — interactive shell slice 3: download / delete / clear
+
+- Shell can now acquire and remove VODs, not just read. VOD view: a not-yet-downloaded VOD offers "Download chat" (reuses `fetcher.fetch_by_url`, flips the row to downloaded in place so the analysis actions unlock without leaving the view); a downloaded VOD offers "Delete VOD…" (confirm → `actions.delete_vod`, then back to the list so it re-merges) and "Clear watched ranges" (only shown when the row has watched data). Streamer list gained "⬇ Download all not-downloaded (N)".
+- New verbs are CLI commands too, so nothing is shell-only: `vodchat delete <id>` (`-y`/`--yes` skips the confirm; find_log precheck gives a clean error before prompting) and `vodchat watched <id> --clear`.
+- `actions.delete_vod(vod_id, config)` removes the chat log + `.meta.json` + `.watched.json`, returning the paths actually removed (sidecars are optional). Lives in `actions` (not `fetcher`) because it's cross-cutting and both front ends use it; locates the VOD via `analyzer.find_log` so "find this id under any streamer" stays in one place.
+- `watched.clear(vod_id, chat_dir)` deletes the `.watched.json` (returns True if one existed). Clearing = "no watched data": `load` already treats a missing file as empty ranges, so removal returns the VOD to pristine state — cleaner than writing an empty-ranges file. This is the parked `watched --clear` item, now built.
+- Delete confirmation defaults to NO (`questionary.confirm(default=False)` / `click.confirm`); download-all defaults to YES. Destructive = guarded, additive = one keypress.
+- Drive-by: `analyzer.find_log`'s "not found" message still said `vodchat fetch --url` (renamed to `vodchat vods --url` when fetch+list merged). Fixed.
+- Tests: `delete_vod` (removes all sidecars + returns paths, only-existing-sidecars, missing-log raises) and `watched.clear` (removes file + load-treats-missing-as-empty, idempotent false). Verified the `delete`/`--clear` CLI wiring end-to-end with a CliRunner smoke test.
+
 ## 2026-06-21 — docs sync + removed dead `downloader` config
 
 - Doc cleanup pass: SPEC.md/CLAUDE.md still described the dual-backend (`chat-downloader`/`TwitchDownloaderCLI`) chat-download plan that was dropped 2026-06-20 for direct GQL; the command sketch still listed the interactive `watched` editor and the removed `analyze <streamer> --all`; the gap-threshold default still read "8–10 min" (now 180s) and an open question still mentioned a "spike multiplier" (now top-N). All brought in line with the code.
