@@ -6,16 +6,19 @@ questionary/Rich interaction lives here so the rest of the package carries no
 interactive-UI dependency. Built on questionary (prompts) + Rich (rendering).
 
 Session state is just two things: the current streamer (its merged VOD list)
-and the selected VOD. Slice 1 is navigation only — drilling into a VOD shows
-its details; the per-VOD actions (analyze / watched / emotes / download /
-delete) get wired in later slices.
+and the selected VOD. The per-VOD view runs the read-only analyses (analyze /
+analyze-emote / top emotes / watched view) via the shared `actions` module;
+downloading and deleting get wired in a later slice.
 """
 
 import questionary
 from rich.console import Console
+from rich.table import Table
 
+from vodchat import actions, fetcher, vodlist
+from vodchat import analyzer as an
 from vodchat import config as cfg
-from vodchat import fetcher, vodlist
+from vodchat import watched as wt
 
 console = Console()
 
@@ -110,24 +113,120 @@ def _vod_choice(index: int, row: dict) -> "questionary.Choice":
 
 
 def _vod_view(row: dict, login: str, config: "cfg.Config") -> str:
-    """Detail + action menu for one VOD.
+    """Detail + action menu for one VOD. Loops so several analyses can be run.
 
-    Returns _BACK to return to the list or _QUIT to exit the shell. Actions
-    beyond navigation are added in a later slice.
+    Returns _BACK to return to the list or _QUIT to exit the shell. Analyses
+    need the chat log, so they're offered only for downloaded VODs.
     """
     while True:
         _print_vod(row, login)
-        action = _select(
-            "Action:",
-            [
-                questionary.Choice("Back to list", value=_BACK),
-                questionary.Choice("Quit", value=_QUIT),
-            ],
-        )
+        choices = []
+        if row["downloaded"]:
+            choices += [
+                questionary.Choice("Analyze (chat volume)", value="analyze"),
+                questionary.Choice("Analyze an emote…", value="emote"),
+                questionary.Choice("Top emotes", value="emotes"),
+                questionary.Choice("Watched ranges", value="watched"),
+                questionary.Separator(),
+            ]
+        else:
+            console.print("[dim](download this VOD to analyze it — coming soon)[/]")
+        choices += [
+            questionary.Choice("Back to list", value=_BACK),
+            questionary.Choice("Quit", value=_QUIT),
+        ]
+
+        action = _select("Action:", choices)
         if action is None or action == _BACK:
             return _BACK
         if action == _QUIT:
             return _QUIT
+        _run_action(action, row["id"], config)
+
+
+def _run_action(action: str, vod_id: str, config: "cfg.Config") -> None:
+    if action == "analyze":
+        _do_analyze(vod_id, config, emote=None)
+    elif action == "emote":
+        emote = _pick_emote(vod_id, config)
+        if emote:
+            _do_analyze(vod_id, config, emote=emote)
+    elif action == "emotes":
+        _show_emotes(vod_id, config)
+    elif action == "watched":
+        _show_watched(vod_id, config)
+
+
+def _do_analyze(vod_id: str, config: "cfg.Config", *, emote: str | None) -> None:
+    """Run analysis (defaults: top 10, unwatched-only) and print the report."""
+    try:
+        result = actions.analyze(vod_id, config, emote=emote)
+    except actions.EmoteNotFound as e:
+        console.print(f"[yellow]{e}[/] Try the Top emotes view to see what's used.")
+        return
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    if result.emote and len(result.emote_matches) > 1:
+        others = "  ".join(result.emote_matches[:5])
+        console.print(
+            f"[dim]Multiple emotes match — using {result.emote}. Matches: {others}[/]"
+        )
+    an.report(result.moments, vod_id, emote=result.emote)
+
+
+def _pick_emote(vod_id: str, config: "cfg.Config") -> str | None:
+    """Autocomplete an emote name from the ones actually used in this VOD."""
+    try:
+        counts = actions.emote_counts(vod_id, config)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return None
+    if not counts:
+        console.print("[yellow]No emotes recorded for this VOD.[/]")
+        return None
+    names = [name for name, _ in counts.most_common()]
+    answer = questionary.autocomplete(
+        "Emote to analyze (type to filter):", choices=names, match_middle=True
+    ).ask()
+    return (answer or "").strip() or None
+
+
+def _show_emotes(vod_id: str, config: "cfg.Config", top_n: int = 20) -> None:
+    try:
+        counts = actions.emote_counts(vod_id, config)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    top = counts.most_common(top_n)
+    if not top:
+        console.print("[yellow]No emotes recorded for this VOD.[/]")
+        return
+    table = Table(title=f"Top emotes — VOD {vod_id}", box=None, title_justify="left")
+    table.add_column("emote")
+    table.add_column("uses", justify="right")
+    for name, n in top:
+        table.add_row(name, str(n))
+    console.print(table)
+
+
+def _show_watched(vod_id: str, config: "cfg.Config") -> None:
+    try:
+        watched_ranges = wt.load(vod_id, config.chat_dir)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    if not watched_ranges.ranges:
+        console.print("[yellow]No watched ranges recorded.[/]")
+        return
+    console.print(f"\n[bold]Watched ranges — VOD {vod_id}[/]")
+    total = 0
+    for r in watched_ranges.ranges:
+        start = an._format_timestamp(r.start_seconds)
+        end = an._format_timestamp(r.end_seconds)
+        console.print(f"  {start} – {end}  [dim]({r.source})[/]")
+        total += r.end_seconds - r.start_seconds
+    console.print(f"Total watched: {an._format_timestamp(total)}")
 
 
 def _print_vod(row: dict, login: str) -> None:

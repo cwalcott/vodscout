@@ -2,9 +2,9 @@ from collections import Counter
 
 import click
 
+from vodchat import actions, fetcher, vodlist
 from vodchat import analyzer as an
 from vodchat import config as cfg
-from vodchat import fetcher, vodlist
 from vodchat import watched as wt
 
 
@@ -310,36 +310,21 @@ def analyze(
     """
     config = ctx.obj["config"]
     try:
-        _streamer, log_path = an.find_log(vod_id, config.chat_dir)
-    except FileNotFoundError as e:
+        result = actions.analyze(
+            vod_id, config, emote=emote, include_watched=include_watched
+        )
+    except actions.EmoteNotFound as e:
+        raise click.ClickException(
+            f"{e} See `vodchat emotes {vod_id}` for what's used."
+        )
+    except (FileNotFoundError, ValueError) as e:
         raise click.ClickException(str(e))
-    except ValueError as e:
-        raise click.ClickException(str(e))
-    messages = an.load_messages(log_path)
-    if emote:
-        matches = an.resolve_emote(emote, an.count_emotes(messages))
-        if not matches:
-            raise click.ClickException(
-                f"No emote matching {emote!r} in this VOD. "
-                f"See `vodchat emotes {vod_id}` for what's used."
-            )
-        emote = matches[0]
-        if len(matches) > 1:
-            others = "  ".join(matches[:5])
-            click.echo(f"Multiple emotes match — using {emote}. Matches: {others}")
-        moments = an.detect_emote_spikes(messages, config.bucket_seconds, emote)
-    else:
-        moments = an.detect_spikes(messages, config.bucket_seconds)
 
-    # Read watched ranges through the on-disk file (keeps the legs decoupled).
-    watched_ranges = wt.load(vod_id, config.chat_dir).ranges
-    an.mark_watched(moments, [(r.start_seconds, r.end_seconds) for r in watched_ranges])
-    # Unwatched-only is the default — the whole point is to surface moments you
-    # haven't seen. --include-watched opts back into the full list.
-    if not include_watched:
-        moments = [m for m in moments if not m.watched]
+    if result.emote and len(result.emote_matches) > 1:
+        others = "  ".join(result.emote_matches[:5])
+        click.echo(f"Multiple emotes match — using {result.emote}. Matches: {others}")
 
-    an.report(moments, vod_id, top_n=top_n, emote=emote)
+    an.report(result.moments, vod_id, top_n=top_n, emote=result.emote)
 
 
 @main.command("emotes")
@@ -355,10 +340,9 @@ def emotes(ctx: click.Context, target: str, top_n: int) -> None:
     counts: Counter = Counter()
     if target.isdigit():
         try:
-            _streamer, log_path = an.find_log(target, config.chat_dir)
+            counts = actions.emote_counts(target, config)
         except (FileNotFoundError, ValueError) as e:
             raise click.ClickException(str(e))
-        counts = an.count_emotes(an.load_messages(log_path))
         label = f"VOD {target}"
     else:
         streamer_dir = config.chat_dir / target

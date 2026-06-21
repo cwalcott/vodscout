@@ -213,8 +213,15 @@ to a full TUI) is a contained change. Built on **questionary** (prompts — arro
 select, checkbox, confirm, autocomplete) for input and **Rich** for rendering.
 A full-screen TUI (Textual/prompt_toolkit) was considered and deferred: the
 lightweight sequence-of-prompts model is enough to settle the interaction shape
-first; revisit if it proves limiting. Shared local+remote list-building lives in
-`vodlist.merged_vods`, imported by both front ends so they show the same list.
+first; revisit if it proves limiting.
+
+Cross-leg orchestration the two front ends share lives in small, front-end-
+neutral modules they both import — not in the legs, and not duplicated:
+`vodlist.merged_vods` (the local+remote VOD list) and `actions.analyze` /
+`actions.emote_counts` (spike detection + watched-range filtering). These
+compose `analyzer` and `watched`, which can't import each other (`watched`
+imports `analyzer`), so the glue belongs one level up. The shared *renderer*
+for moments is `analyzer.report` (already Rich), called by both front ends.
 
 ## Shared conventions
 
