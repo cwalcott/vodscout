@@ -73,6 +73,11 @@ Format:
 - `gap_threshold_seconds` default 600 → 120, then 120 → 180 after trying it. 120 (2 min) was too fragmented on a real VOD; the right value depends heavily on personal chat cadence with a given streamer, so 180 (3 min) is a less-twitchy default, not a claim of correctness. Still config-overridable.
 - Added a `--gap <seconds>` flag to `watched --infer` (overrides config for that run). The threshold already flowed through `infer_from_chat` as a parameter; this just wires a CLI option to it so the tune-and-look loop (`--infer --gap 240`, look, `--gap 300`, look) doesn't require editing config.toml each time. Settle on a value, then bake it into config as the personal default. No flag without `--infer` guard — it's silently ignored otherwise (help text scopes it to --infer).
 
+## 2026-06-21 — docs sync + removed dead `downloader` config
+
+- Doc cleanup pass: SPEC.md/CLAUDE.md still described the dual-backend (`chat-downloader`/`TwitchDownloaderCLI`) chat-download plan that was dropped 2026-06-20 for direct GQL; the command sketch still listed the interactive `watched` editor and the removed `analyze <streamer> --all`; the gap-threshold default still read "8–10 min" (now 180s) and an open question still mentioned a "spike multiplier" (now top-N). All brought in line with the code.
+- Removed the `downloader` config option entirely (Config field, `_DOWNLOADERS`, load/save, and the setup-interactive prompt). It was dead: the fetcher always downloads chat directly from GQL and never read `config.downloader`, so setup was asking users to pick a backend that did nothing. Existing config files keep the key harmlessly; it's ignored.
+
 ## 2026-06-21 — merged `fetch` + `list` into one `vods` command
 
 - Collapsed `fetch` and `list` into a single `vods <streamer>` command. After the metadata-sidecar rework they shared almost all their code (both build the merged local+remote view); keeping two commands meant two ways to see the same list. One place now both shows VODs and downloads them.

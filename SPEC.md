@@ -62,13 +62,17 @@ the chat download.
 > via a headless browser remains rejected — fragile, and unnecessary when
 > the GQL query returns clean structured data.)
 
-**Underlying chat download mechanism:** considered two options —
-`chat-downloader` (Python package, in-process, no external binary) vs.
-shelling out to `TwitchDownloaderCLI` (external binary, what the user's
-existing `td` alias already uses). Plan: support both, `chat-downloader`
-as the zero-extra-dependency default, `TwitchDownloaderCLI` as a
-configurable alternative for output-format consistency with existing
-archives.
+**Underlying chat download mechanism:** initially considered two
+backends — `chat-downloader` (Python package, in-process) vs. shelling
+out to `TwitchDownloaderCLI` (external binary, what the user's existing
+`td` alias used) — with a plan to support both. That dual-backend plan
+was dropped (see DECISIONS.md 2026-06-20): `chat-downloader` was broken
+(stale client ID), `TwitchDownloaderCLI` needs an external binary, and
+every alternative ultimately talks to the same GQL endpoint anyway. So
+the fetcher now reads chat directly from `gql.twitch.tv` itself (~30 lines
+of `requests`), a single in-process backend with no external dependency.
+Chat logs are ephemeral, so there's no archive-format-consistency reason
+to keep a second backend.
 
 ### 2. Watched-range tracking
 
@@ -87,18 +91,21 @@ activity in that VOD.
   timestamps in the VOD's chat and infer likely-watched ranges via
   gap-based session segmentation: cluster messages where the gap between
   consecutive messages is below some threshold, split into separate
-  ranges where the gap exceeds it. Pad slightly before the first and
-  after the last message in each cluster. Threshold should be
-  configurable (default in the 8–10 minute range as a starting point).
-  This is a *suggestion* the user reviews/edits, not ground truth — chat
+  ranges where the gap exceeds it. Pad the outermost edges of each
+  cluster slightly (a real break is left fully unwatched; see DECISIONS.md
+  2026-06-21). Threshold is configurable (`gap_threshold_seconds`,
+  currently 180s — tuned down from an initial 8–10 min guess) and
+  overridable per-run via `--gap`. This is a *suggestion* the user
+  reviews/edits, not ground truth — chat
   silence doesn't mean not-watching, and it's blind to VODs watched
   without chatting at all.
 
-**Interactive entry point.** A `vodchat watched <vod-id>` command should
-drop into an interactive session: show current ranges, offer to add a
-manual range, offer to run chat-inference, show a timeline view, confirm
-and save. Not purely a flag-driven command — ranges are easier to riff on
-interactively than to get right in one CLI invocation.
+**Entry point.** `vodchat watched <vod-id>` shows current ranges; edits
+are flag-driven: `--add START-END` (manual range), `--infer` (suggest from
+your chat, with `--user`/`--gap`), `--edit` ($EDITOR). The originally-
+envisioned interactive REPL — drop into a session that offers add/infer/
+timeline and confirm-save — was deferred (its exact prompts are an open
+question, easier to feel out later); see DECISIONS.md 2026-06-20.
 
 **Editing.** Should support: interactive add/toggle from the inferred
 suggestion list, direct edit of the underlying file via `$EDITOR`, and
@@ -197,7 +204,6 @@ with different highlighted intervals.
 - **Config file.** TOML, e.g. `~/.config/vodchat/config.toml`:
   ```toml
   chat_dir = "~/SynologyDrive/chats"
-  downloader = "chat-downloader"  # or "twitchdownloadercli"
   twitch_username = "..."  # your login, default for `watched --infer`
   ```
   First run with no config present should prompt interactively and write
@@ -219,10 +225,12 @@ vodchat vods <streamer> --pick         # list, then prompt for which to download
 vodchat vods --url <vod-url>           # download one VOD by URL/ID
 vodchat emotes <vod-id>                # top emotes for one VOD
 vodchat emotes <streamer>              # top emotes across a streamer's VODs
-vodchat watched <vod-id>                # interactive watched-range editor
+vodchat watched <vod-id>                # show watched ranges
+vodchat watched <vod-id> --add 1:00:00-1:30:00   # add a manual range
+vodchat watched <vod-id> --infer        # suggest ranges from your own chat
+vodchat watched <vod-id> --edit         # edit the ranges file in $EDITOR
 vodchat analyze <vod-id>                # top moments by chat volume (+ top emotes)
 vodchat analyze <vod-id> --emote <name> # top moments for one emote
-vodchat analyze <streamer> --all        # analyze everything for that streamer
 ```
 
 ## Explicitly out of scope (for now)
@@ -240,11 +248,11 @@ vodchat analyze <streamer> --all        # analyze everything for that streamer
 
 ## Open questions (intentionally unresolved — figure out while building)
 
-- Exact bucket size and spike multiplier defaults for chat-rate spikes
-- Exact gap-threshold default for chat-inferred watched ranges (and
-  whether density-weighting before the gap, not just a fixed threshold,
-  turns out to be worth the complexity)
+- Exact bucket-size default for chat-rate spikes (currently 60s). Spike
+  detection settled on top-N over a rolling baseline — no multiplier
+  threshold (see DECISIONS.md 2026-06-20).
+- Gap-threshold default landed at 180s but is personal/streamer-dependent,
+  not a claim of correctness; open whether density-weighting before the
+  gap (not just a fixed threshold) is worth the complexity.
 - Exact interactive UX/prompts for `vodchat watched`
 - Exact terminal timeline rendering approach
-- Whether `chat-downloader` or `TwitchDownloaderCLI` should be the
-  *actual* default once both are working, vs. just "supported"

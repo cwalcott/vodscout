@@ -18,10 +18,11 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 
 - Python
 - Config: TOML (`~/.config/vodchat/config.toml`)
-- Chat download: `chat-downloader` package by default; optional
-  `TwitchDownloaderCLI` (external binary) as an alternative backend
 - Twitch's public GQL endpoint (`gql.twitch.tv`, public web Client-ID)
-  for both chat download and streamer-name VOD discovery — no credentials
+  for both chat download and streamer-name VOD discovery — no credentials.
+  Single in-process backend (direct `requests`); the earlier
+  `chat-downloader`/`TwitchDownloaderCLI` dual-backend plan was dropped
+  (see DECISIONS.md 2026-06-20).
 
 ## Conventions
 

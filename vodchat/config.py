@@ -5,13 +5,10 @@ import tomlkit
 
 CONFIG_PATH = Path("~/.config/vodchat/config.toml").expanduser()
 
-_DOWNLOADERS = ["chat-downloader", "twitchdownloadercli"]
-
 
 @dataclass
 class Config:
     chat_dir: Path
-    downloader: str = "chat-downloader"
     # your own login, used as the default for `watched --infer`
     twitch_username: str = ""
     # Detection thresholds — overridable via [analysis] in config.toml
@@ -34,7 +31,6 @@ def load() -> "Config":
     analysis = doc.get("analysis") or {}
     return Config(
         chat_dir=chat_dir,
-        downloader=str(doc.get("downloader", "chat-downloader")),
         twitch_username=str(doc.get("twitch_username", "")),
         bucket_seconds=int(analysis.get("bucket_seconds", 60)),
         gap_threshold_seconds=int(analysis.get("gap_threshold_seconds", 180)),
@@ -51,7 +47,6 @@ def save(config: "Config") -> None:
         doc = tomlkit.document()
 
     doc["chat_dir"] = str(config.chat_dir)
-    doc["downloader"] = config.downloader
     doc["twitch_username"] = config.twitch_username
 
     defaults = Config(chat_dir=config.chat_dir)
@@ -80,12 +75,6 @@ def setup_interactive() -> "Config":
     )
     chat_dir = Path(chat_dir_str).expanduser()
 
-    downloader = click.prompt(
-        "Downloader backend",
-        default="chat-downloader",
-        type=click.Choice(_DOWNLOADERS),
-    )
-
     twitch_username = click.prompt(
         "Your Twitch username (used to infer watched ranges from your chat)",
         default="",
@@ -94,7 +83,6 @@ def setup_interactive() -> "Config":
 
     config = Config(
         chat_dir=chat_dir,
-        downloader=downloader,
         twitch_username=twitch_username,
     )
     save(config)
