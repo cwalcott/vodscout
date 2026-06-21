@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import click
@@ -226,12 +227,8 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
 @main.command()
 @click.argument("vod_id")
 @click.option(
-    "--no-tokens",
-    "show_tokens",
-    is_flag=True,
-    flag_value=False,
-    default=True,
-    help="Omit top tokens from the report.",
+    "--emote",
+    help="Show top moments for a specific emote instead of overall chat volume.",
 )
 @click.option(
     "--top", "top_n", default=10, show_default=True, help="Number of moments to show."
@@ -246,11 +243,17 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
 def analyze(
     ctx: click.Context,
     vod_id: str,
-    show_tokens: bool,
+    emote: str | None,
     top_n: int,
     include_watched: bool,
 ) -> None:
-    """Find interesting moments in a VOD."""
+    """Find interesting moments in a VOD.
+
+    By default, ranks moments where overall chat volume spiked, annotated with
+    the emotes most used in each. With --emote, ranks moments where that one
+    emote spiked above its own normal rate (see `vodchat emotes` to discover
+    which emotes a chat spams).
+    """
     config = ctx.obj["config"]
     try:
         _streamer, log_path = an.find_log(vod_id, config.chat_dir)
@@ -259,7 +262,10 @@ def analyze(
     except ValueError as e:
         raise click.ClickException(str(e))
     messages = an.load_messages(log_path)
-    moments = an.detect_spikes(messages, config.bucket_seconds)
+    if emote:
+        moments = an.detect_emote_spikes(messages, config.bucket_seconds, emote)
+    else:
+        moments = an.detect_spikes(messages, config.bucket_seconds)
 
     # Read watched ranges through the on-disk file (keeps the legs decoupled).
     watched_ranges = wt.load(vod_id, config.chat_dir).ranges
@@ -269,4 +275,42 @@ def analyze(
     if not include_watched:
         moments = [m for m in moments if not m.watched]
 
-    an.report(moments, vod_id, top_n=top_n, show_tokens=show_tokens)
+    an.report(moments, vod_id, top_n=top_n, emote=emote)
+
+
+@main.command("emotes")
+@click.argument("target")
+@click.option(
+    "--top", "top_n", default=20, show_default=True, help="Number of emotes to show."
+)
+@click.pass_context
+def emotes(ctx: click.Context, target: str, top_n: int) -> None:
+    """Top emotes by usage for a VOD (numeric id) or a streamer (all VODs)."""
+    config = ctx.obj["config"]
+
+    counts: Counter = Counter()
+    if target.isdigit():
+        try:
+            _streamer, log_path = an.find_log(target, config.chat_dir)
+        except (FileNotFoundError, ValueError) as e:
+            raise click.ClickException(str(e))
+        counts = an.count_emotes(an.load_messages(log_path))
+        label = f"VOD {target}"
+    else:
+        streamer_dir = config.chat_dir / target
+        logs = sorted(streamer_dir.glob("*.txt")) if streamer_dir.is_dir() else []
+        if not logs:
+            raise click.ClickException(f"No downloaded VODs for {target!r}.")
+        for path in logs:
+            counts.update(an.count_emotes(an.load_messages(path)))
+        label = f"{target} ({len(logs)} VOD(s))"
+
+    top = counts.most_common(top_n)
+    if not top:
+        click.echo(f"No emotes found for {label}.")
+        return
+
+    click.echo(f"Top emotes — {label}\n")
+    width = max(len(emote) for emote, _ in top)
+    for emote, count in top:
+        click.echo(f"  {emote:<{width}}  {count}")

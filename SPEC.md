@@ -120,32 +120,50 @@ suggestion list, direct edit of the underlying file via `$EDITOR`, and
 of "interesting moments," ranked, ideally biased toward unwatched parts
 of the VOD.
 
-v1 signal types:
+The core mechanic is shared: bucket messages into fixed time windows,
+compute a rolling baseline (trailing average over some window), and flag
+buckets exceeding it. This drives two distinct, separately-invoked
+analyses rather than one merged timeline (a merged "multi-signal" timeline
+was tried and reverted — it read as confusing jargon):
 
-1. **Chat-rate spikes.** Bucket messages into fixed time windows, compute
-   a rolling baseline (trailing average over some window), flag buckets
-   exceeding the baseline by some multiplier. Output: timestamp,
-   magnitude ("Nx normal"), a few representative sample messages.
-2. **Per-emote spikes.** Same bucket/baseline/multiplier approach, run
-   independently per emote — but only for emotes clearing a minimum
-   total-usage threshold across the VOD, to avoid noise from one-off
-   rare emotes spiking trivially against a near-zero baseline.
-3. **Labeled emotes as event markers.** Optional per-streamer config
-   mapping specific emotes to semantic labels (e.g. "hype", "sad",
-   "rage"), so reports can say "Hype emote surged at 1:23:45" instead of
-   a raw emote name. Falls back to raw emote names if unconfigured.
+1. **Overall view** (`analyze <vod>`). Moments where overall chat *volume*
+   spiked above its recent normal. Each moment is annotated with the top
+   emotes used in that window — emotes are the readable signal of *what*
+   the moment was (raw word tokens were tried as context and dropped as
+   noise). Output: timestamp, magnitude ("N× normal"), top emotes, a
+   direct timestamped VOD link.
+2. **Per-emote view** (`analyze <vod> --emote <name>`). Moments where one
+   chosen emote spiked above *its own* normal rate. No usage threshold —
+   the user picked the emote deliberately. Output per moment: timestamp,
+   magnitude (× the emote's baseline) and absolute uses (a rare emote can
+   jump 9× off a tiny base without mattering, so both numbers matter).
 
-Detectors run independently, then merge into one ranked timeline —
-moments hit by multiple signals (e.g. both an overall spike and a
-specific labeled-emote spike) should rank higher / read as
-higher-confidence, rather than appearing as separate weaker entries.
+Emotes are central to both, so the chat log stores emote **names** (not
+IDs) — the analyzer, the `emotes` command, and reports all speak the same
+human-readable language. Both first-party Twitch emotes and third-party
+BTTV/FFZ/7TV emotes are counted: the fetcher resolves the channel's
+third-party emote sets at download time and records them by name in the
+log, so the analyzer needs no network access and treats all emotes
+uniformly.
 
-When watched ranges exist for the VOD, the report should be able to
-filter to (or clearly mark) moments outside the watched ranges.
+A separate `emotes` command surfaces top emotes by usage for a single
+VOD or aggregated across all of a streamer's downloaded chats — read-only
+insight into what a chat actually spams. The natural flow is `emotes`
+(what gets spammed here) → `analyze` (the hype moments) → `analyze
+--emote X` (when specifically X popped off).
+
+*Considered and dropped:* a per-streamer config mapping emotes to
+semantic labels ("hype"/"sad"/"rage") for nicer report wording. Too much
+manual setup for the payoff; raw emote names are clear enough. A lighter
+**per-streamer "favorite emotes" list** — a plain list (not a label map)
+used to *boost* ranking of moments involving those emotes — is the likely
+next addition here, seeded by the `emotes` command, but is not built yet.
+
+When watched ranges exist for the VOD, the report filters out watched
+moments by default (`--include-watched` opts back in).
 
 v1 explicitly does *not* include (deferred to later): message-length/caps
-anomaly detection, combined numeric scoring beyond simple
-multi-signal-agreement boosting.
+anomaly detection, and any combined cross-signal scoring.
 
 **Output (v1):** CLI report. Top N moments, each with timestamp, a direct
 timestamped VOD link (`https://twitch.tv/videos/<id>?t=<XXhXXmXXs>`), and
@@ -170,18 +188,14 @@ with different highlighted intervals.
   downloader = "chat-downloader"  # or "twitchdownloadercli"
   twitch_client_id = "..."
   twitch_client_secret = "..."
-
-  [shroud.emotes]
-  shroudW = "hype"
-  shroudSad = "sad"
-  shroudRage = "rage"
   ```
   First run with no config present should prompt interactively and write
   the file, rather than requiring manual setup.
-- **Detection thresholds** (bucket size, spike multiplier, gap threshold
-  for watched-inference, minimum emote usage count) are hardcoded
-  defaults, overridable via the config file. Not exposed as CLI flags in
-  v1 — revisit if per-run experimentation turns out to be wanted.
+- **Detection thresholds** (bucket size, gap threshold for
+  watched-inference) are hardcoded defaults, overridable via the config
+  file. The spike-baseline constants (`MIN_BASELINE`, baseline window,
+  etc.) live in the analyzer, not config. `--emote` is the one analysis
+  CLI flag; revisit exposing more if per-run experimentation is wanted.
 
 ## Commands (rough sketch, not final)
 
@@ -190,8 +204,11 @@ vodchat fetch --url <vod-url>          # Path A: download chat for one VOD
 vodchat fetch <streamer>               # Path C: list/pick recent VODs (needs credentials)
 vodchat fetch <streamer> --all         # Path C: download all undownloaded, no prompt
 vodchat list <streamer>                # show what's downloaded locally
+vodchat emotes <vod-id>                # top emotes for one VOD
+vodchat emotes <streamer>              # top emotes across a streamer's VODs
 vodchat watched <vod-id>                # interactive watched-range editor
-vodchat analyze <vod-id>                # interesting-moments report
+vodchat analyze <vod-id>                # top moments by chat volume (+ top emotes)
+vodchat analyze <vod-id> --emote <name> # top moments for one emote
 vodchat analyze <streamer> --all        # analyze everything for that streamer
 ```
 

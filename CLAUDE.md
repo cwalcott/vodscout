@@ -29,10 +29,11 @@ Read `SPEC.md` first for the full architecture and rationale. Read
   organized by streamer:
   `<chat_dir>/<streamer>/<vod_id>.txt` and
   `<chat_dir>/<streamer>/<vod_id>.watched.json`
-- Detection thresholds (bucket size, gap threshold, min emote usage
-  count) are overridable via config. Spike detection uses a top-N
-  approach — no multiplier threshold; see DECISIONS.md.
-  Not CLI flags for now (top_n is a CLI flag on `analyze`).
+- Detection thresholds (bucket size, gap threshold) are overridable via
+  config. Spike detection uses a top-N approach — no multiplier threshold;
+  see DECISIONS.md. `analyze` has two views: overall chat-volume moments
+  (default) and `--emote <name>` for one emote. `top_n` and `--emote` are
+  CLI flags; other thresholds are config-only.
 - The three legs — fetcher, watched-range tracking, analyzer — should
   stay decoupled. They communicate only through the files on disk, not
   through shared in-process state. Don't reach across that boundary for

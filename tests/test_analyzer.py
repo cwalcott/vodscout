@@ -6,19 +6,15 @@ from vodchat.analyzer import (
     Moment,
     _format_timestamp,
     _vod_link,
+    count_emotes,
+    detect_emote_spikes,
     detect_spikes,
     mark_watched,
 )
 
 
 def _moment(ts: int) -> Moment:
-    return Moment(
-        timestamp_seconds=ts,
-        signals=["chat-rate"],
-        magnitude=2.0,
-        samples=[],
-        watched=False,
-    )
+    return Moment(timestamp_seconds=ts, magnitude=2.0)
 
 
 def _msgs(bucket_idx: int, count: int, bucket_seconds: int = 60) -> list[dict]:
@@ -55,7 +51,6 @@ def test_single_surge_produces_one_moment():
     m = moments[0]
     assert m.timestamp_seconds == 30 * 60
     assert m.magnitude == pytest.approx(10.0)
-    assert m.signals == ["chat-rate"]
     assert m.watched is False
 
 
@@ -99,17 +94,90 @@ def test_insufficient_prior_buckets_suppresses_spike():
     assert moments == []
 
 
-def test_top_tokens_from_run():
-    base = {i: 5 for i in range(30)}
-    # Surge: 15 "KEKW" and 5 "lol" — KEKW should rank first
-    surge_msgs = [
-        {"time": 30 * 60 + 1, "user": "u", "msg": "KEKW"} for _ in range(15)
-    ] + [{"time": 30 * 60 + 1, "user": "u", "msg": "lol"} for _ in range(5)]
-    msgs = _build(base) + surge_msgs
-    moments = detect_spikes(msgs, 60)
+def _msg(t: int, emotes: list[str] | None = None) -> dict:
+    d: dict = {"time": t, "user": "u", "msg": "x"}
+    if emotes:
+        d["emotes"] = emotes
+    return d
+
+
+def test_top_emotes_annotate_moment():
+    # 30 quiet buckets, then a volume spike whose window is full of emotes.
+    msgs = _build({i: 5 for i in range(30)})
+    surge = []
+    for _ in range(15):
+        surge.append(_msg(30 * 60 + 1, ["KEKW"]))
+    for _ in range(5):
+        surge.append(_msg(30 * 60 + 1, ["lol"]))
+    moments = detect_spikes(msgs + surge, 60)
     assert len(moments) == 1
-    assert len(moments[0].samples) <= 5
-    assert moments[0].samples[0].startswith("KEKW")
+    top = moments[0].top_emotes
+    assert top[0] == ("KEKW", 15)
+    assert ("lol", 5) in top
+    assert len(top) <= 5
+
+
+def test_moment_with_no_emotes_has_empty_context():
+    msgs = _build({i: 5 for i in range(30)} | {30: 50})
+    moments = detect_spikes(msgs, 60)
+    assert moments[0].top_emotes == []
+
+
+# ── detect_emote_spikes ──────────────────────────────────────────────────────────
+
+
+def test_detect_emote_spikes_finds_emote_surge():
+    # Kappa runs ~5/bucket for 30 buckets, then 50 at bucket 30 → 10x its baseline.
+    msgs = []
+    for b in range(30):
+        msgs += [_msg(b * 60 + 1, ["Kappa"]) for _ in range(5)]
+    msgs += [_msg(30 * 60 + 1, ["Kappa"]) for _ in range(50)]
+
+    moments = detect_emote_spikes(msgs, 60, "Kappa")
+    assert len(moments) == 1
+    m = moments[0]
+    assert m.timestamp_seconds == 30 * 60
+    assert m.magnitude == pytest.approx(10.0)
+    assert m.count == 50  # raw uses in the peak bucket
+
+
+def test_detect_emote_spikes_counts_repeats_in_one_message():
+    # Same shape, but the spike comes from one message carrying 50 Kappa.
+    msgs = []
+    for b in range(30):
+        msgs += [_msg(b * 60 + 1, ["Kappa"]) for _ in range(5)]
+    msgs.append(_msg(30 * 60 + 1, ["Kappa"] * 50))
+
+    moments = detect_emote_spikes(msgs, 60, "Kappa")
+    assert len(moments) == 1
+    assert moments[0].count == 50
+
+
+def test_detect_emote_spikes_unknown_emote_returns_empty():
+    msgs = [_msg(i * 60 + 1, ["Kappa"]) for i in range(40)]
+    assert detect_emote_spikes(msgs, 60, "NeverUsed") == []
+
+
+def test_detect_emote_spikes_ignores_other_emotes():
+    # PogChamp spikes; Kappa is flat — asking for Kappa finds nothing.
+    msgs = []
+    for b in range(30):
+        msgs += [_msg(b * 60 + 1, ["Kappa", "PogChamp"]) for _ in range(5)]
+    msgs += [_msg(30 * 60 + 1, ["PogChamp"]) for _ in range(50)]
+
+    assert detect_emote_spikes(msgs, 60, "Kappa") == []
+    assert len(detect_emote_spikes(msgs, 60, "PogChamp")) == 1
+
+
+# ── count_emotes ───────────────────────────────────────────────────────────────
+
+
+def test_count_emotes():
+    msgs = [_msg(1, ["A", "B"]), _msg(2, ["A"]), _msg(3), _msg(4, ["B", "B"])]
+    counts = count_emotes(msgs)
+    assert counts["A"] == 2
+    assert counts["B"] == 3
+    assert "missing" not in counts
 
 
 # ── mark_watched ──────────────────────────────────────────────────────────────
