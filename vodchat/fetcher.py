@@ -14,6 +14,11 @@ _CHAT_CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 _META_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 _CHAT_HASH = "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"
 
+# Path C — official Helix API for streamer-name VOD discovery.
+_HELIX_URL = "https://api.twitch.tv/helix"
+_OAUTH_URL = "https://id.twitch.tv/oauth2/token"
+_VOD_LIST_LIMIT = 10  # recent archives to list per streamer
+
 
 def _vod_id_from_url(url_or_id: str) -> str:
     match = re.search(r"/videos/(\d+)", url_or_id)
@@ -148,11 +153,91 @@ def fetch_by_url(url: str, config: Config) -> Path:
     return out_path
 
 
+def _app_token(config: Config) -> str:
+    """Mint a client-credentials app access token from the user's own creds."""
+    resp = requests.post(
+        _OAUTH_URL,
+        params={
+            "client_id": config.twitch_client_id,
+            "client_secret": config.twitch_client_secret,
+            "grant_type": "client_credentials",
+        },
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        raise ValueError(
+            "Twitch auth failed — check twitch_client_id / twitch_client_secret "
+            "in your config."
+        )
+    return resp.json()["access_token"]
+
+
+def _helix_get(session: requests.Session, path: str, params: dict) -> list[dict]:
+    resp = session.get(f"{_HELIX_URL}/{path}", params=params, timeout=15)
+    resp.raise_for_status()
+    return resp.json().get("data") or []
+
+
 def list_remote_vods(streamer: str, config: Config) -> list[dict]:
-    """List recent VODs for a streamer via Twitch Helix API."""
-    raise NotImplementedError
+    """List recent archived VODs for a streamer via the official Helix API.
+
+    Each dict is a raw Helix video object (id, title, created_at, duration,
+    user_login, ...). Requires the user's own Twitch API credentials.
+    """
+    if not (config.twitch_client_id and config.twitch_client_secret):
+        raise ValueError(
+            "Twitch API credentials required for streamer-name fetch. Set "
+            "twitch_client_id and twitch_client_secret in your config, or fetch "
+            "by VOD --url instead."
+        )
+
+    token = _app_token(config)
+    with requests.Session() as session:
+        session.headers["Client-Id"] = config.twitch_client_id
+        session.headers["Authorization"] = f"Bearer {token}"
+        users = _helix_get(session, "users", {"login": streamer})
+        if not users:
+            raise ValueError(f"Streamer {streamer!r} not found.")
+        return _helix_get(
+            session,
+            "videos",
+            {"user_id": users[0]["id"], "type": "archive", "first": _VOD_LIST_LIMIT},
+        )
 
 
-def fetch_by_streamer(streamer: str, config: Config, fetch_all: bool = False) -> None:
-    """List/pick undownloaded VODs for a streamer and fetch selected ones."""
-    raise NotImplementedError
+def downloaded_ids(streamer: str, config: Config) -> set[str]:
+    """VOD IDs already on disk for a streamer (empty if the dir doesn't exist)."""
+    streamer_dir = config.chat_dir / streamer
+    if not streamer_dir.is_dir():
+        return set()
+    return {p.stem for p in streamer_dir.glob("*.txt")}
+
+
+def undownloaded_vods(videos: list[dict], streamer: str, config: Config) -> list[dict]:
+    """Filter `videos` to those whose chat log isn't already on disk."""
+    have = downloaded_ids(streamer, config)
+    return [v for v in videos if v["id"] not in have]
+
+
+def parse_selection(text: str, count: int) -> list[int]:
+    """Parse a numbered-pick string into sorted 0-based indices.
+
+    Accepts "all", or a comma/space-separated list of 1-based numbers
+    (e.g. "1,3 5"). Blank selects nothing. Raises ValueError on a number
+    outside 1..count or a non-numeric token.
+    """
+    text = text.strip()
+    if not text:
+        return []
+    if text.lower() == "all":
+        return list(range(count))
+
+    indices: set[int] = set()
+    for token in text.replace(",", " ").split():
+        if not token.isdigit():
+            raise ValueError(f"Not a number: {token!r}")
+        n = int(token)
+        if not 1 <= n <= count:
+            raise ValueError(f"Out of range (1–{count}): {n}")
+        indices.add(n - 1)
+    return sorted(indices)

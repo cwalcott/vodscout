@@ -36,12 +36,70 @@ def fetch(
         except Exception as e:
             raise click.ClickException(str(e))
     elif streamer:
-        raise click.ClickException(
-            "Streamer-based fetch not yet implemented. "
-            "Use --url to fetch by VOD URL or ID instead."
-        )
+        _fetch_by_streamer(streamer, config, fetch_all)
     else:
         raise click.UsageError("Provide a VOD --url or a streamer name.")
+
+
+def _fetch_by_streamer(streamer: str, config: "cfg.Config", fetch_all: bool) -> None:
+    """Path C: discover a streamer's VODs via Helix, pick, and download."""
+    try:
+        videos = fetcher.list_remote_vods(streamer, config)
+    except ValueError as e:
+        raise click.ClickException(str(e))
+
+    if not videos:
+        click.echo(f"No archived VODs found for {streamer!r}.")
+        return
+
+    login = videos[0]["user_login"]
+    have = fetcher.downloaded_ids(login, config)
+    if have.issuperset(v["id"] for v in videos):
+        click.echo(f"All recent VODs for {login} are already downloaded.")
+        return
+
+    if fetch_all:
+        # Non-interactive: only the new ones, silently skipping what's on disk.
+        chosen = [v for v in videos if v["id"] not in have]
+    else:
+        # Show the whole recent timeline; mark (and dim) what's already on disk
+        # so the numbering matches what the user sees on Twitch, instead of
+        # silently dropping downloaded VODs and looking like it missed them.
+        suffix = f" ({len(have & {v['id'] for v in videos})} already downloaded)"
+        click.echo(f"Recent VODs for {login}{suffix}:")
+        for i, v in enumerate(videos, 1):
+            date = v["created_at"][:10]
+            row = f"  {i:>2}. {date}  {v['duration']:>9}  {v['title']}"
+            if v["id"] in have:
+                row = click.style(f"{row}  [downloaded]", dim=True)
+            click.echo(row)
+        selection = click.prompt(
+            "Fetch which? (e.g. 1,3 / all / blank to cancel)",
+            default="",
+            show_default=False,
+        )
+        try:
+            indices = fetcher.parse_selection(selection, len(videos))
+        except ValueError as e:
+            raise click.BadParameter(str(e))
+        if not indices:
+            click.echo("Nothing selected.")
+            return
+        # "all" (and explicit picks of downloaded rows) skip what's on disk.
+        chosen = [videos[i] for i in indices if videos[i]["id"] not in have]
+        if not chosen:
+            click.echo("Nothing to fetch (all selected VODs already downloaded).")
+            return
+
+    for v in chosen:
+        try:
+            out_path = fetcher.fetch_by_url(v["id"], config)
+            click.echo(f"Saved to {out_path}")
+        except FileExistsError as e:
+            click.echo(str(e))
+        except Exception as e:
+            # One bad VOD shouldn't abort the rest of the batch.
+            click.echo(f"Failed {v['id']}: {e}")
 
 
 @main.command("list")
