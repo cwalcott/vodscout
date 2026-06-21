@@ -151,6 +151,13 @@ def list_vods(ctx: click.Context, streamer: str) -> None:
     "username",
     help="Your Twitch login for --infer (defaults to twitch_username in config).",
 )
+@click.option(
+    "--gap",
+    "gap_seconds",
+    type=int,
+    help="Silence (seconds) that splits sessions for --infer "
+    "(overrides config; default 180). Lower = more, shorter ranges.",
+)
 @click.pass_context
 def watched(
     ctx: click.Context,
@@ -159,6 +166,7 @@ def watched(
     edit_file: bool,
     infer: bool,
     username: str | None,
+    gap_seconds: int | None,
 ) -> None:
     """View or edit watched ranges for a VOD."""
     config = ctx.obj["config"]
@@ -188,9 +196,8 @@ def watched(
                     "No username for --infer. Pass --user <login> or set "
                     "twitch_username in your config."
                 )
-            suggested = wt.infer_from_chat(
-                vod_id, username, chat_dir, config.gap_threshold_seconds
-            )
+            gap = gap_seconds if gap_seconds is not None else config.gap_threshold_seconds
+            suggested = wt.infer_from_chat(vod_id, username, chat_dir, gap)
             if not suggested:
                 click.echo(f"No messages from {username!r} found in this VOD's chat.")
                 return

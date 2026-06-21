@@ -66,6 +66,13 @@ Format:
 - Each emote source (3 providers × global + channel = 6 fetches) is independently best-effort: a provider being down — or, very commonly, not having the channel registered (channel endpoint 404s) — must not drop the other sources, including that provider's globals, nor abort the chat download. (First cut wrapped each provider as a unit, so a channel 404 silently discarded that provider's globals; split to per-source guards.)
 - Another reason existing logs need a re-fetch (beyond the ID→name switch): older logs predate third-party capture.
 
+## 2026-06-21 — watched-inference: carve/bridge instead of cluster-padding
+
+- Reworked `infer_from_chat` after real-VOD feedback: the old symmetric `PAD_SECONDS=120` padded *every* cluster edge, so it bled 2 min into each side of genuine long breaks (a 25-min away-from-keyboard gap showed ~4 min as watched) and — because two 120s pads overlap — secretly enforced a ~4-min minimum hole regardless of threshold. New model: a silence longer than the threshold is a real break, left *fully* unwatched; interior range boundaries sit on the messages themselves with no bleed. Short silences are still bridged.
+- `PAD_SECONDS` (120, every edge) → `EDGE_PAD_SECONDS` (30, outermost edges only). The lead/trail cushion now applies only before the very first message and after the very last — it extends into VOD start/end, never into a break.
+- `gap_threshold_seconds` default 600 → 120, then 120 → 180 after trying it. 120 (2 min) was too fragmented on a real VOD; the right value depends heavily on personal chat cadence with a given streamer, so 180 (3 min) is a less-twitchy default, not a claim of correctness. Still config-overridable.
+- Added a `--gap <seconds>` flag to `watched --infer` (overrides config for that run). The threshold already flowed through `infer_from_chat` as a parameter; this just wires a CLI option to it so the tune-and-look loop (`--infer --gap 240`, look, `--gap 300`, look) doesn't require editing config.toml each time. Settle on a value, then bake it into config as the personal default. No flag without `--infer` guard — it's silently ignored otherwise (help text scopes it to --infer).
+
 ## 2026-06-20 — Path C (streamer-name fetch via Helix)
 
 - App access token is minted per invocation (client-credentials flow against `id.twitch.tv/oauth2/token`), not cached to disk. One extra ~100ms auth call per run, but no new on-disk credential artifact to manage/invalidate — keeps the fetcher leg stateless. Revisit if run latency becomes annoying.

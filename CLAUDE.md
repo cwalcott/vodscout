@@ -32,8 +32,9 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 - Detection thresholds (bucket size, gap threshold) are overridable via
   config. Spike detection uses a top-N approach — no multiplier threshold;
   see DECISIONS.md. `analyze` has two views: overall chat-volume moments
-  (default) and `--emote <name>` for one emote. `top_n` and `--emote` are
-  CLI flags; other thresholds are config-only.
+  (default) and `--emote <name>` for one emote. `top_n` and `--emote`
+  (analyze) and `--gap` (watched --infer, overrides the gap threshold for
+  one run) are CLI flags; other thresholds are config-only.
 - The three legs — fetcher, watched-range tracking, analyzer — should
   stay decoupled. They communicate only through the files on disk, not
   through shared in-process state. Don't reach across that boundary for

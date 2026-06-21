@@ -200,7 +200,9 @@ def test_infer_single_message(chat_dir):
     ranges = watched.infer_from_chat("12345", "me", chat_dir, gap_threshold_seconds=600)
     assert ranges == [
         WatchedRange(
-            1000 - watched.PAD_SECONDS, 1000 + watched.PAD_SECONDS, "chat-inferred"
+            1000 - watched.EDGE_PAD_SECONDS,
+            1000 + watched.EDGE_PAD_SECONDS,
+            "chat-inferred",
         )
     ]
 
@@ -213,10 +215,20 @@ def test_infer_clusters_split_on_gap(chat_dir):
     )
     ranges = watched.infer_from_chat("12345", "me", chat_dir, gap_threshold_seconds=600)
     assert len(ranges) == 2
-    assert ranges[0] == WatchedRange(0, 120 + watched.PAD_SECONDS, "chat-inferred")
+    # Interior edges (facing the break) are NOT padded — the full break stays
+    # unwatched. Only the outer start/end get the EDGE_PAD cushion.
+    assert ranges[0] == WatchedRange(0, 120, "chat-inferred")
     assert ranges[1] == WatchedRange(
-        900 - watched.PAD_SECONDS, 1000 + watched.PAD_SECONDS, "chat-inferred"
+        900, 1000 + watched.EDGE_PAD_SECONDS, "chat-inferred"
     )
+
+
+def test_infer_short_gap_is_bridged(chat_dir):
+    # A silence under the threshold doesn't carve a hole — one session.
+    _write_log(chat_dir, [(0, "me"), (100, "me"), (200, "me")])
+    ranges = watched.infer_from_chat("12345", "me", chat_dir, gap_threshold_seconds=120)
+    assert len(ranges) == 1
+    assert ranges[0] == WatchedRange(0, 200 + watched.EDGE_PAD_SECONDS, "chat-inferred")
 
 
 def test_infer_gap_exactly_at_threshold_does_not_split(chat_dir):
@@ -227,7 +239,7 @@ def test_infer_gap_exactly_at_threshold_does_not_split(chat_dir):
 
 
 def test_infer_start_clamped_at_zero(chat_dir):
-    _write_log(chat_dir, [(30, "me")])
+    _write_log(chat_dir, [(20, "me")])
     ranges = watched.infer_from_chat("12345", "me", chat_dir, gap_threshold_seconds=600)
     assert ranges[0].start_seconds == 0
 

@@ -137,23 +137,29 @@ def vod_end_seconds(vod_id: str, chat_dir: Path) -> int:
     return max((m["time"] for m in messages), default=0)
 
 
-# Lead/trail padding applied to each inferred cluster. Chat lags the moment
-# that prompted it, and people watch a bit before/after they type — a couple
-# minutes of slop keeps inferred ranges from hugging message timestamps too
-# tightly. Assistive only; the user reviews before it's saved.
-PAD_SECONDS = 120
+# Small lead/trail cushion applied to the OUTER edges of the inferred session
+# only — before the very first message and after the very last. Chat lags the
+# moment that prompted it and people watch a little before they start typing,
+# so the very start/end shouldn't hug the first/last message exactly. This
+# padding extends into the VOD's start/end, never into a between-session break:
+# a real break stays fully unwatched. Assistive only; the user reviews before
+# it's saved.
+EDGE_PAD_SECONDS = 30
 
 
 def infer_from_chat(
-    vod_id: str, username: str, chat_dir: Path, gap_threshold_seconds: int = 600
+    vod_id: str, username: str, chat_dir: Path, gap_threshold_seconds: int = 120
 ) -> list[WatchedRange]:
     """Infer watched ranges from the user's own messages in the chat log.
 
     Gap-based session segmentation: cluster the user's message timestamps,
-    splitting into a new range wherever the gap between consecutive messages
-    exceeds gap_threshold_seconds. Each cluster is padded by PAD_SECONDS on
-    each side (start clamped at 0). Assistive, not authoritative — chat
-    silence doesn't mean not-watching.
+    starting a new session wherever the silence between consecutive messages
+    exceeds gap_threshold_seconds. Short silences are bridged (kept watched);
+    a longer silence is a real break, left fully unwatched — interior range
+    boundaries sit on the messages themselves, with no padding bleeding into
+    the break. Only the outermost edges get an EDGE_PAD_SECONDS cushion (start
+    clamped at 0). Assistive, not authoritative — chat silence doesn't mean
+    not-watching.
     """
     _streamer, log_path = analyzer.find_log(vod_id, chat_dir)
     messages = analyzer.load_messages(log_path)
@@ -170,11 +176,9 @@ def infer_from_chat(
         else:
             clusters[-1].append(t)
 
-    return [
-        WatchedRange(
-            start_seconds=max(0, c[0] - PAD_SECONDS),
-            end_seconds=c[-1] + PAD_SECONDS,
-            source="chat-inferred",
-        )
-        for c in clusters
-    ]
+    ranges = [WatchedRange(c[0], c[-1], "chat-inferred") for c in clusters]
+    # Pad only the outermost edges — never into a between-session break. (For a
+    # single cluster, ranges[0] is ranges[-1], so it gets both.)
+    ranges[0].start_seconds = max(0, ranges[0].start_seconds - EDGE_PAD_SECONDS)
+    ranges[-1].end_seconds += EDGE_PAD_SECONDS
+    return ranges
