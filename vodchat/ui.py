@@ -7,9 +7,9 @@ so the rest of the package carries no interactive-UI dependency.
 Flow: a VOD *list* screen (the streamer's merged local+remote VODs); selecting a
 VOD pushes a full *VOD window* with top moments (left) and emotes (right) side by
 side, a `w` All/Unwatched toggle that drives the moment list, and `f` to favorite
-an emote (pinned first). The list, moments, and emotes are real now — favorite
-*persistence* is still an in-memory stub (slice 3) and watched-editing is not
-wired yet (slice 4).
+an emote (pinned first). The list, moments, emotes, and favorite persistence
+(a `<streamer>/favorites.json` sidecar) are real now — watched-editing is the
+remaining stub (slice 4).
 """
 
 import webbrowser
@@ -20,10 +20,10 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Static
 
-from vodchat import _fixtures as fx
 from vodchat import actions, fetcher, vodlist
 from vodchat import analyzer as an
 from vodchat import config as cfg
+from vodchat import favorites as fav
 from vodchat import watched as wt
 
 
@@ -120,7 +120,7 @@ class VodScreen(Screen):
         self.vod = vod
         self.show_all = False  # Unwatched is the default view
         self.current_emote: str | None = None  # None = overall chat-volume view
-        self.favorites: set[str] = set(fx.fixture_favorites(self._streamer))
+        self.favorites: set[str] = set()  # loaded from the sidecar in on_mount
         self._raw_moments: list[an.Moment] = []  # all moments (watched-flagged)
         self._emote_counts: Counter = Counter()
 
@@ -151,6 +151,7 @@ class VodScreen(Screen):
         self.query_one(
             "#emotes", DataTable
         ).border_title = "Emotes  (f: ★ · tab: focus)"
+        self.favorites = fav.load(self._streamer, self.app.config.chat_dir)
         self._load_moments()
         self._load_emotes()
         self._populate_moments()
@@ -277,7 +278,7 @@ class VodScreen(Screen):
             self.favorites.discard(name)
         else:
             self.favorites.add(name)
-        fx.save_favorites(self._streamer, self.favorites)
+        fav.save(self.favorites, self._streamer, self.app.config.chat_dir)
         self._populate_emotes()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:

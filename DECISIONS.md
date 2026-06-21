@@ -15,6 +15,22 @@ Format:
 
 ---
 
+## 2026-06-21 — TUI slice 3: favorite emotes persisted; ranking boost dropped
+
+- Favorites now persist as a per-streamer `<chat_dir>/<streamer>/favorites.json`
+  sidecar (new `favorites.py`: `load`/`save` keyed on streamer — no `find_log`,
+  since favorites aren't per-VOD). The TUI loads them when a VOD opens; `f` toggles
+  and saves; favorited emotes pin to the top of the emote pane. Replaced the
+  in-memory `_fixtures` stub, which is deleted.
+- Dropped the parked "favorite emotes *boost* moment ranking" idea (SPEC analyzer
+  note). It re-introduces the moment-scoring boost already reverted as confusing
+  (the `SIGNAL_BOOST` merged-timeline cut), it wasn't part of the redesign's actual
+  need (favorites just pin in the emote list + are the thing you drill into), and a
+  magnitude boost muddies the clean "overall view = chat-volume ranking" semantic.
+  Favorites stay a pure emote-pane affordance: pinned first + one keypress to drill
+  into a favorite's own spikes. If it ever comes back, a non-reordering visual mark
+  (flag favorite-involving moments without resorting) is the fallback over a boost.
+
 ## 2026-06-21 — front end: questionary shell → Textual TUI (slices 0–1)
 
 - Reversed the earlier "questionary + Rich, defer the full TUI" decision (2026-06-21

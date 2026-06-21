@@ -172,10 +172,14 @@ insight into what a chat actually spams. The natural flow is `emotes`
 
 *Considered and dropped:* a per-streamer config mapping emotes to
 semantic labels ("hype"/"sad"/"rage") for nicer report wording. Too much
-manual setup for the payoff; raw emote names are clear enough. A lighter
-**per-streamer "favorite emotes" list** — a plain list (not a label map)
-used to *boost* ranking of moments involving those emotes — is the likely
-next addition here, seeded by the `emotes` command, but is not built yet.
+manual setup for the payoff; raw emote names are clear enough. A
+**per-streamer "favorite emotes" list** (a plain list, persisted as a
+`<streamer>/favorites.json` sidecar) *is* built: the TUI pins favorited emotes
+to the top of its emote pane. The originally-imagined further use — *boosting*
+the ranking of moments involving those emotes — was dropped (see DECISIONS
+2026-06-21): it re-introduces a moment-scoring boost already reverted as
+confusing, and favorites earn their keep as a pin + drill-in affordance without
+it.
 
 When watched ranges exist for the VOD, the report filters out watched
 moments by default (`--include-watched` opts back in).
