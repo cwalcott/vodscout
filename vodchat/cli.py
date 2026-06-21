@@ -4,16 +4,40 @@ import click
 
 from vodchat import analyzer as an
 from vodchat import config as cfg
-from vodchat import fetcher
+from vodchat import fetcher, vodlist
 from vodchat import watched as wt
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.pass_context
 def main(ctx: click.Context) -> None:
-    """Find interesting moments in Twitch VOD chat."""
+    """Find interesting moments in Twitch VOD chat.
+
+    Run with no command to launch the interactive shell.
+    """
     ctx.ensure_object(dict)
     ctx.obj["config"] = cfg.load()
+    if ctx.invoked_subcommand is None:
+        from vodchat import ui
+
+        ui.run_shell(ctx.obj["config"])
+
+
+@main.command()
+@click.argument("streamer", required=False)
+@click.option(
+    "--offline", is_flag=True, help="Don't query Twitch; show local downloads only."
+)
+@click.pass_context
+def browse(ctx: click.Context, streamer: str | None, offline: bool) -> None:
+    """Interactively browse a streamer's VODs and act on them.
+
+    Opens a navigable session: pick a streamer (or pass one / set
+    default_streamer), arrow through the merged VOD list, and drill into a VOD.
+    """
+    from vodchat import ui
+
+    ui.run_shell(ctx.obj["config"], streamer, offline=offline)
 
 
 @main.command()
@@ -70,7 +94,7 @@ def vods(
             "--offline only lists; drop it to download (--all / --get / --pick)."
         )
 
-    ordered, login, note = _vod_list(streamer, config, offline)
+    ordered, login, note = vodlist.merged_vods(streamer, config, offline)
     if not ordered:
         raise click.ClickException(note or f"No downloaded VODs for {streamer!r}.")
 
@@ -109,50 +133,6 @@ def vods(
         click.echo("Nothing to download.")
         return
     _download_many(chosen, config)
-
-
-def _vod_list(
-    streamer: str, config: "cfg.Config", offline: bool
-) -> tuple[list[dict], str, str | None]:
-    """Merge local downloads (source of truth) with Twitch's recent VODs.
-
-    Returns (rows newest-first, resolved login, note). Local downloads are never
-    dropped; the remote check only adds new VODs and tops up metadata. A remote
-    failure is reported via `note`, not raised — local rows still come back.
-    """
-    streamer_dir = config.chat_dir / streamer
-    rows: dict[str, dict] = {}
-    for v in fetcher.local_vods(streamer, config):
-        rows[v["id"]] = {
-            **v,
-            "downloaded": True,
-            "watched": (streamer_dir / f"{v['id']}.watched.json").exists(),
-        }
-
-    login = streamer
-    note: str | None = None
-    if not offline:
-        try:
-            for v in fetcher.list_remote_vods(streamer):
-                login = v["user_login"]
-                existing = rows.get(v["id"])
-                if existing:
-                    existing.update(
-                        title=v["title"],
-                        created_at=v["created_at"],
-                        duration_seconds=v["duration_seconds"],
-                    )
-                else:
-                    rows[v["id"]] = {**v, "downloaded": False, "watched": False}
-        except ValueError as e:  # streamer not found remotely
-            note = str(e)
-        except Exception as e:  # offline / network failure — local still shows
-            note = f"Couldn't reach Twitch ({e})."
-
-    def sort_key(r: dict) -> tuple[str, int]:
-        return (r["created_at"] or "", int(r["id"]) if r["id"].isdigit() else 0)
-
-    return sorted(rows.values(), key=sort_key, reverse=True), login, note
 
 
 def _render(ordered: list[dict], login: str) -> None:
@@ -261,9 +241,7 @@ def watched(
                     "twitch_username in your config."
                 )
             gap = (
-                gap_seconds
-                if gap_seconds is not None
-                else config.gap_threshold_seconds
+                gap_seconds if gap_seconds is not None else config.gap_threshold_seconds
             )
             suggested = wt.infer_from_chat(vod_id, username, chat_dir, gap)
             if not suggested:

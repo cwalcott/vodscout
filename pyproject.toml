@@ -12,6 +12,7 @@ dependencies = [
     "tomlkit",
     "rich",
     "requests>=2.34.2",
+    "questionary",
 ]
 
 [project.scripts]

@@ -11,6 +11,8 @@ class Config:
     chat_dir: Path
     # your own login, used as the default for `watched --infer`
     twitch_username: str = ""
+    # streamer the interactive shell opens to when none is given
+    default_streamer: str = ""
     # Detection thresholds — overridable via [analysis] in config.toml
     bucket_seconds: int = 60
     # silence past this (seconds) splits watched-inference sessions
@@ -32,6 +34,7 @@ def load() -> "Config":
     return Config(
         chat_dir=chat_dir,
         twitch_username=str(doc.get("twitch_username", "")),
+        default_streamer=str(doc.get("default_streamer", "")),
         bucket_seconds=int(analysis.get("bucket_seconds", 60)),
         gap_threshold_seconds=int(analysis.get("gap_threshold_seconds", 180)),
     )
@@ -48,6 +51,7 @@ def save(config: "Config") -> None:
 
     doc["chat_dir"] = str(config.chat_dir)
     doc["twitch_username"] = config.twitch_username
+    doc["default_streamer"] = config.default_streamer
 
     defaults = Config(chat_dir=config.chat_dir)
     non_default_thresholds = (
@@ -81,9 +85,16 @@ def setup_interactive() -> "Config":
         show_default=False,
     )
 
+    default_streamer = click.prompt(
+        "Default streamer to open in the interactive shell (optional)",
+        default="",
+        show_default=False,
+    )
+
     config = Config(
         chat_dir=chat_dir,
         twitch_username=twitch_username,
+        default_streamer=default_streamer,
     )
     save(config)
     click.echo(f"\nConfig saved to {CONFIG_PATH}\n")

@@ -191,6 +191,31 @@ moments) is worth doing here too, since the watched-range timeline and
 the analyzer's moment-timeline are likely the same underlying renderer
 with different highlighted intervals.
 
+## Interactive shell (front end, not a fourth leg)
+
+The CLI is fully retained — it's scriptable, composable, and good for one-off
+invocations. On top of it (not replacing it) there's an **interactive shell**:
+`vodchat browse [streamer]`, or a bare `vodchat` with no subcommand. The point
+is to kill the tedium of stateless re-invocation — re-typing the streamer, then
+copying a VOD id, then re-typing it for each follow-up command. The shell holds
+that context.
+
+It is a *second consumer* of the three legs' APIs, parallel to `cli.py` — not a
+new leg. Session state is just two things: the **current streamer** (its merged
+VOD list) and the **selected VOD**. Flow: resolve a streamer (arg →
+`default_streamer` config key → prompt) → arrow through the merged local+remote
+VOD list → drill into a VOD → act on it (analyze / `--emote` / watched / emotes
+/ download / delete).
+
+Implementation is contained in `ui.py`: the three legs never import it, and all
+interactive-UI dependencies live there, so swapping the approach later (or going
+to a full TUI) is a contained change. Built on **questionary** (prompts — arrow
+select, checkbox, confirm, autocomplete) for input and **Rich** for rendering.
+A full-screen TUI (Textual/prompt_toolkit) was considered and deferred: the
+lightweight sequence-of-prompts model is enough to settle the interaction shape
+first; revisit if it proves limiting. Shared local+remote list-building lives in
+`vodlist.merged_vods`, imported by both front ends so they show the same list.
+
 ## Shared conventions
 
 - **Directory layout**, configurable root, organized by streamer:
@@ -204,7 +229,8 @@ with different highlighted intervals.
 - **Config file.** TOML, e.g. `~/.config/vodchat/config.toml`:
   ```toml
   chat_dir = "~/SynologyDrive/chats"
-  twitch_username = "..."  # your login, default for `watched --infer`
+  twitch_username = "..."     # your login, default for `watched --infer`
+  default_streamer = "..."    # streamer the bare `vodchat` shell opens to
   ```
   First run with no config present should prompt interactively and write
   the file, rather than requiring manual setup.
@@ -217,6 +243,8 @@ with different highlighted intervals.
 ## Commands (rough sketch, not final)
 
 ```
+vodchat                                # interactive shell (uses default_streamer if set)
+vodchat browse <streamer>              # interactive shell, opened to a streamer
 vodchat vods <streamer>                # browse: your downloads + recent Twitch VODs, merged
 vodchat vods <streamer> --offline      # browse local downloads only, no Twitch call
 vodchat vods <streamer> --all          # download all not-yet-downloaded VODs
