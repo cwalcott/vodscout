@@ -15,6 +15,33 @@ Format:
 
 ---
 
+## 2026-06-21 — terminal timeline: tried, decided to pass
+
+- Prototyped the SPEC v1 "terminal timeline" as a one-line volume sparkline
+  (`▁▂▃▄▅▆▇█` heights = chat volume per slice, watched slices dimmed, top-N
+  moment slices colored) shown atop the `analyze` report plus a standalone
+  `timeline` command/shell action. Built it end-to-end (renderer in `analyzer`,
+  `AnalysisResult` timeline fields, both front ends, tests) and looked at it on
+  real VODs.
+- Decided NOT to keep it — reverted before commit. It read as decorative, not
+  functional: the `analyze` report already answers the tool's core question
+  ("where do I jump?") with ranked, timestamped, clickable links, and you act on
+  those links, not on the shape of a bar. Its one semi-useful angle —
+  watched-coverage at a glance — is largely redundant too, since `analyze`
+  already filters to unwatched moments by default, so the bar just restated
+  existing output visually rather than enabling a new decision. Not worth the
+  surface area for a tool we want to keep lean.
+- The "exact terminal timeline rendering approach" open question stays listed in
+  SPEC: this is "tried and passed for now," not "ruled out forever." If a
+  timeline comes back, it should earn its place by doing something the moment
+  list can't (e.g. being the interactive surface for *marking* watched ranges),
+  not just visualizing what's already printed.
+- Where the next real value likely is instead (parked, more substantive than the
+  timeline): the cross-VOD "what should I watch next?" digest (one ranked line
+  per downloaded-but-unwatched VOD — answers a question the tool currently can't,
+  since it only helps *within* a chosen VOD), and the per-streamer favorite-emote
+  ranking boost (changes the actual ranking, not just presentation).
+
 ## 2026-06-20
 
 - Used tomlkit instead of tomllib + tomli-w: single dep, preserves user comments/formatting when writing back to config.
