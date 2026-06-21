@@ -28,31 +28,33 @@ but don't depend on each other's internals.
 
 **Job:** get a VOD's chat log onto disk, organized by streamer.
 
-Two paths, depending on whether the user has configured Twitch API
-credentials:
+Two ways to point the tool at VODs, neither requiring credentials:
 
-- **Path A — no credentials required.** User provides a VOD URL or ID
-  directly (already knows it, e.g. copied from twitch.tv). Tool downloads
-  chat for that VOD. No Twitch dev app needed — this uses the same
-  chat-replay mechanism that established tools (`TwitchDownloaderCLI`,
-  `chat-downloader`) already use openly.
-- **Path C — requires user's own Twitch API credentials.** User provides
-  a streamer name. Tool calls Twitch's official Helix API (`Get Users`,
-  `Get Videos`) to list recent VODs, diffs against what's already
-  downloaded locally, and lets the user pick which to fetch. Requires the
-  user to register their own free Twitch Developer app (client ID +
-  secret) — this cannot be baked into the tool and shared across users,
-  since a distributed CLI can't keep a secret secret.
+- **By VOD URL or ID.** User provides a VOD URL or ID directly (already
+  knows it, e.g. copied from twitch.tv). Tool downloads chat for that VOD.
+- **By streamer name.** User provides a streamer name. Tool lists the
+  streamer's recent archived VODs, diffs against what's already downloaded
+  locally, and lets the user pick which to fetch.
 
-  (Path B — scraping the public videos page via headless browser — and
-  Path D — using Twitch's unofficial internal GraphQL/gql endpoint — were
-  considered and rejected. B is fragile and still circumvents the
-  intended access method; D has been explicitly flagged elsewhere as
-  against Twitch's ToS.)
+Both use the same access mechanism: Twitch's public GQL endpoint
+(`gql.twitch.tv`) with the public web Client-ID — the same endpoint and
+the same chat-replay data established tools (`TwitchDownloaderCLI`,
+`chat-downloader`) and the web player itself use. Chat download and
+streamer-name discovery are two queries against that one endpoint. No
+Twitch Developer app, no user-supplied credentials.
 
-If no credentials are configured, streamer-name-based fetch should fail
-with a clear message pointing at URL/ID-based fetch as the alternative,
-and/or at credential setup.
+> **History / reversal.** An earlier design did streamer-name discovery
+> through Twitch's *official* Helix API, which requires each user to
+> register their own dev app (client ID + secret). That was dropped
+> (2026-06-21): chat download already runs on the unofficial GQL endpoint,
+> so the Helix path was paying a real onboarding cost (dev-app setup) to
+> avoid GQL for *just the listing step* — a distinction that bought
+> nothing while GQL was already in use for the heavier chat download. GQL
+> can list a channel's archived videos with no credentials (it's what the
+> channel "Videos" page does), so discovery moved onto it too and the
+> credential plumbing was removed. (Scraping the rendered videos *page*
+> via a headless browser remains rejected — fragile, and unnecessary when
+> the GQL query returns clean structured data.)
 
 **Underlying chat download mechanism:** considered two options —
 `chat-downloader` (Python package, in-process, no external binary) vs.
@@ -189,8 +191,7 @@ with different highlighted intervals.
   ```toml
   chat_dir = "~/SynologyDrive/chats"
   downloader = "chat-downloader"  # or "twitchdownloadercli"
-  twitch_client_id = "..."
-  twitch_client_secret = "..."
+  twitch_username = "..."  # your login, default for `watched --infer`
   ```
   First run with no config present should prompt interactively and write
   the file, rather than requiring manual setup.
@@ -203,9 +204,9 @@ with different highlighted intervals.
 ## Commands (rough sketch, not final)
 
 ```
-vodchat fetch --url <vod-url>          # Path A: download chat for one VOD
-vodchat fetch <streamer>               # Path C: list/pick recent VODs (needs credentials)
-vodchat fetch <streamer> --all         # Path C: download all undownloaded, no prompt
+vodchat fetch --url <vod-url>          # download chat for one VOD
+vodchat fetch <streamer>               # list/pick recent VODs (no credentials)
+vodchat fetch <streamer> --all         # download all undownloaded, no prompt
 vodchat list <streamer>                # show what's downloaded locally
 vodchat emotes <vod-id>                # top emotes for one VOD
 vodchat emotes <streamer>              # top emotes across a streamer's VODs
@@ -221,7 +222,11 @@ vodchat analyze <streamer> --all        # analyze everything for that streamer
   would reuse the analyzer's core logic, add DOM injection / manifest
   plumbing on top)
 - Full Twitch chat client
-- Anything relying on Twitch's unofficial internal GraphQL endpoint
+- Scraping Twitch's rendered web pages (e.g. a headless browser against
+  the channel videos page) — the GQL endpoint returns the same data
+  cleanly, so page-scraping buys nothing. (Note: the tool *does* use
+  Twitch's public GQL endpoint for chat download and VOD discovery; see
+  the Fetcher section.)
 - Downloading actual video files (this tool is chat-only)
 
 ## Open questions (intentionally unresolved — figure out while building)

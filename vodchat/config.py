@@ -12,8 +12,6 @@ _DOWNLOADERS = ["chat-downloader", "twitchdownloadercli"]
 class Config:
     chat_dir: Path
     downloader: str = "chat-downloader"
-    twitch_client_id: str = ""
-    twitch_client_secret: str = ""
     # your own login, used as the default for `watched --infer`
     twitch_username: str = ""
     # Detection thresholds — overridable via [analysis] in config.toml
@@ -36,8 +34,6 @@ def load() -> "Config":
     return Config(
         chat_dir=chat_dir,
         downloader=str(doc.get("downloader", "chat-downloader")),
-        twitch_client_id=str(doc.get("twitch_client_id", "")),
-        twitch_client_secret=str(doc.get("twitch_client_secret", "")),
         twitch_username=str(doc.get("twitch_username", "")),
         bucket_seconds=int(analysis.get("bucket_seconds", 60)),
         gap_threshold_seconds=int(analysis.get("gap_threshold_seconds", 180)),
@@ -55,8 +51,6 @@ def save(config: "Config") -> None:
 
     doc["chat_dir"] = str(config.chat_dir)
     doc["downloader"] = config.downloader
-    doc["twitch_client_id"] = config.twitch_client_id
-    doc["twitch_client_secret"] = config.twitch_client_secret
     doc["twitch_username"] = config.twitch_username
 
     defaults = Config(chat_dir=config.chat_dir)
@@ -97,22 +91,9 @@ def setup_interactive() -> "Config":
         show_default=False,
     )
 
-    click.echo(
-        "\nTwitch API credentials — optional, only needed for streamer-name fetch.\n"
-        "Leave blank to skip (you can still fetch by VOD URL/ID without these)."
-    )
-    twitch_client_id = click.prompt("Twitch Client ID", default="", show_default=False)
-    twitch_client_secret = ""
-    if twitch_client_id:
-        twitch_client_secret = click.prompt(
-            "Twitch Client Secret", default="", show_default=False, hide_input=True
-        )
-
     config = Config(
         chat_dir=chat_dir,
         downloader=downloader,
-        twitch_client_id=twitch_client_id,
-        twitch_client_secret=twitch_client_secret,
         twitch_username=twitch_username,
     )
     save(config)

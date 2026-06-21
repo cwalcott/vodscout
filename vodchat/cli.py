@@ -43,9 +43,9 @@ def fetch(
 
 
 def _fetch_by_streamer(streamer: str, config: "cfg.Config", fetch_all: bool) -> None:
-    """Path C: discover a streamer's VODs via Helix, pick, and download."""
+    """Discover a streamer's VODs via Twitch's GQL endpoint, pick, and download."""
     try:
-        videos = fetcher.list_remote_vods(streamer, config)
+        videos = fetcher.list_remote_vods(streamer)
     except ValueError as e:
         raise click.ClickException(str(e))
 

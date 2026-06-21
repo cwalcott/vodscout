@@ -14,9 +14,8 @@ _CHAT_CLIENT_ID = "kd1unb4b3q4t58fwlpcbzcbnm76a8fp"
 _META_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 _CHAT_HASH = "b70a3591ff0f4e0313d126c6a1502d79a1c02baebb288227c582044aa76adf6a"
 
-# Path C — official Helix API for streamer-name VOD discovery.
-_HELIX_URL = "https://api.twitch.tv/helix"
-_OAUTH_URL = "https://id.twitch.tv/oauth2/token"
+# Streamer-name VOD discovery — same public GQL endpoint used for chat,
+# no Twitch API credentials required.
 _VOD_LIST_LIMIT = 10  # recent archives to list per streamer
 
 # Third-party emote providers. BTTV/FFZ/7TV emotes aren't in Twitch's emote
@@ -239,56 +238,56 @@ def fetch_by_url(url: str, config: Config) -> Path:
     return out_path
 
 
-def _app_token(config: Config) -> str:
-    """Mint a client-credentials app access token from the user's own creds."""
-    resp = requests.post(
-        _OAUTH_URL,
-        params={
-            "client_id": config.twitch_client_id,
-            "client_secret": config.twitch_client_secret,
-            "grant_type": "client_credentials",
-        },
-        timeout=15,
-    )
-    if resp.status_code != 200:
-        raise ValueError(
-            "Twitch auth failed — check twitch_client_id / twitch_client_secret "
-            "in your config."
-        )
-    return resp.json()["access_token"]
+_VIDEOS_QUERY = """
+query($login: String!, $first: Int!) {
+  user(login: $login) {
+    login
+    videos(first: $first, type: ARCHIVE, sort: TIME) {
+      edges { node { id title lengthSeconds publishedAt } }
+    }
+  }
+}
+"""
 
 
-def _helix_get(session: requests.Session, path: str, params: dict) -> list[dict]:
-    resp = session.get(f"{_HELIX_URL}/{path}", params=params, timeout=15)
-    resp.raise_for_status()
-    return resp.json().get("data") or []
+def _format_duration(seconds: int | None) -> str:
+    h, rem = divmod(int(seconds or 0), 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}"
 
 
-def list_remote_vods(streamer: str, config: Config) -> list[dict]:
-    """List recent archived VODs for a streamer via the official Helix API.
+def list_remote_vods(streamer: str) -> list[dict]:
+    """List recent archived VODs for a streamer via Twitch's GQL endpoint.
 
-    Each dict is a raw Helix video object (id, title, created_at, duration,
-    user_login, ...). Requires the user's own Twitch API credentials.
+    Each dict carries id, title, user_login, created_at, duration. No Twitch
+    API credentials needed — this is the same public GQL endpoint (and public
+    web Client-ID) the chat download already uses.
     """
-    if not (config.twitch_client_id and config.twitch_client_secret):
-        raise ValueError(
-            "Twitch API credentials required for streamer-name fetch. Set "
-            "twitch_client_id and twitch_client_secret in your config, or fetch "
-            "by VOD --url instead."
-        )
-
-    token = _app_token(config)
+    payload = {
+        "query": _VIDEOS_QUERY,
+        "variables": {"login": streamer, "first": _VOD_LIST_LIMIT},
+    }
     with requests.Session() as session:
-        session.headers["Client-Id"] = config.twitch_client_id
-        session.headers["Authorization"] = f"Bearer {token}"
-        users = _helix_get(session, "users", {"login": streamer})
-        if not users:
-            raise ValueError(f"Streamer {streamer!r} not found.")
-        return _helix_get(
-            session,
-            "videos",
-            {"user_id": users[0]["id"], "type": "archive", "first": _VOD_LIST_LIMIT},
+        session.headers["Client-ID"] = _META_CLIENT_ID
+        data = _gql_post(session, payload)
+
+    user = data.get("user")
+    if user is None:
+        raise ValueError(f"Streamer {streamer!r} not found.")
+
+    videos = []
+    for edge in user["videos"]["edges"]:
+        node = edge["node"]
+        videos.append(
+            {
+                "id": node["id"],
+                "title": node["title"],
+                "user_login": user["login"],
+                "created_at": node["publishedAt"],
+                "duration": _format_duration(node["lengthSeconds"]),
+            }
         )
+    return videos
 
 
 def downloaded_ids(streamer: str, config: Config) -> set[str]:

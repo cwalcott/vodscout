@@ -20,8 +20,8 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 - Config: TOML (`~/.config/vodchat/config.toml`)
 - Chat download: `chat-downloader` package by default; optional
   `TwitchDownloaderCLI` (external binary) as an alternative backend
-- Twitch Helix API for streamer-name VOD discovery (requires user's own
-  client ID/secret — never hardcode credentials into the tool)
+- Twitch's public GQL endpoint (`gql.twitch.tv`, public web Client-ID)
+  for both chat download and streamer-name VOD discovery — no credentials
 
 ## Conventions
 
@@ -42,11 +42,14 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 
 ## Things to never do
 
-- Never embed/hardcode a Twitch Client ID or Secret in source, tests, or
-  examples. Credentials are always user-supplied via config.
-- Don't add scraping of Twitch's web pages or calls to Twitch's
-  unofficial internal GraphQL/gql endpoint. This was explicitly
-  considered and rejected — see SPEC.md.
+- Never require a private Twitch secret (dev-app client secret, OAuth
+  user token, etc.). The tool authenticates only with Twitch's *public*
+  web Client-ID, like the web player — fine to hardcode. The Helix path
+  that needed user credentials was removed (see DECISIONS.md 2026-06-21).
+- Don't add scraping of Twitch's *rendered web pages* (e.g. headless
+  browser against the videos page). The public GQL endpoint returns the
+  same data cleanly. (GQL itself is in use and fine — that's how chat and
+  VOD discovery both work.)
 - Don't add video (not chat) downloading — out of scope.
 
 ## Workflow
