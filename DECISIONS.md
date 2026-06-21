@@ -73,6 +73,16 @@ Format:
 - `gap_threshold_seconds` default 600 → 120, then 120 → 180 after trying it. 120 (2 min) was too fragmented on a real VOD; the right value depends heavily on personal chat cadence with a given streamer, so 180 (3 min) is a less-twitchy default, not a claim of correctness. Still config-overridable.
 - Added a `--gap <seconds>` flag to `watched --infer` (overrides config for that run). The threshold already flowed through `infer_from_chat` as a parameter; this just wires a CLI option to it so the tune-and-look loop (`--infer --gap 240`, look, `--gap 300`, look) doesn't require editing config.toml each time. Settle on a value, then bake it into config as the personal default. No flag without `--infer` guard — it's silently ignored otherwise (help text scopes it to --infer).
 
+## 2026-06-21 — `list` reworked: local+remote merge, metadata sidecars
+
+- `list <streamer>` is no longer a bare local ID dump. It now merges two sources: your local downloads (source of truth) and — unless `--offline` — a default Twitch check for recent VODs. Output is newest-first with `[downloaded]` / `[watched]` tags; not-yet-downloaded recent VODs show plain (available to grab). Each row: date, duration, id, title.
+- Local is authoritative and never deleted/hidden: a downloaded VOD that's aged off Twitch's ~10-VOD recent window — or been removed from Twitch entirely — still shows, rendered from its sidecar. Remote only *adds* (new VODs) and *tops up* metadata; it never prunes. (User requirement: VODs get removed and they don't want to lose what's downloaded.)
+- Remote-by-default with graceful fallback: a network failure prints local rows plus a "Couldn't reach Twitch" note rather than erroring. `--offline` skips the call entirely. Only errors when there's nothing local AND nothing remote.
+- Metadata sidecar `<vod_id>.meta.json` (id, title, created_at, duration_seconds) written by the fetcher at download time (`write_meta`), best-effort (a sidecar failure never fails the chat download). This is what makes the offline/local view rich instead of ID-only. `_video_metadata` gained `publishedAt` to populate `created_at`.
+- No legacy backfill of pre-existing downloads (decided with user: still in dev, little downloaded, fine to wipe and re-fetch). So no per-VOD metadata-lookup path; sidecar-less local VODs would just show as ID-only with blank title/date, but in practice everything going forward has a sidecar.
+- `list_remote_vods` now returns `duration_seconds` (int) instead of a pre-formatted `duration` string; `_format_duration` formats at display time (used by both `list` and the `fetch` picker). One source of truth for duration.
+- Follow-up parked: `fetch`'s own interactive listing now overlaps with `list`; intent is to slim `fetch` toward pure acquisition once this settles. Not done yet.
+
 ## 2026-06-21 — streamer-name discovery: Helix → GQL (drop credentials)
 
 - Replaced the Helix-based VOD discovery with a query against the same public GQL endpoint already used for chat download. `list_remote_vods(streamer)` now sends a raw (non-persisted) GraphQL query — `user(login){videos(type:ARCHIVE, sort:TIME)}` — with the public web Client-ID, no auth. Removed `_app_token`, `_helix_get`, `_HELIX_URL`, `_OAUTH_URL`, and the OAuth client-credentials dance.

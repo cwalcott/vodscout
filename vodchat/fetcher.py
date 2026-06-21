@@ -55,7 +55,7 @@ def _video_metadata(vod_id: str) -> dict:
     payload = {
         "query": (
             f'query{{video(id:"{vod_id}")'
-            f"{{title,lengthSeconds,owner{{id,login}}}}}}"
+            f"{{title,lengthSeconds,publishedAt,owner{{id,login}}}}}}"
         ),
         "variables": {},
     }
@@ -235,6 +235,7 @@ def fetch_by_url(url: str, config: Config) -> Path:
         tmp_path.unlink(missing_ok=True)
         raise
 
+    write_meta(out_dir, vod_id, meta)
     return out_path
 
 
@@ -259,9 +260,9 @@ def _format_duration(seconds: int | None) -> str:
 def list_remote_vods(streamer: str) -> list[dict]:
     """List recent archived VODs for a streamer via Twitch's GQL endpoint.
 
-    Each dict carries id, title, user_login, created_at, duration. No Twitch
-    API credentials needed — this is the same public GQL endpoint (and public
-    web Client-ID) the chat download already uses.
+    Each dict carries id, title, user_login, created_at, duration_seconds. No
+    Twitch API credentials needed — this is the same public GQL endpoint (and
+    public web Client-ID) the chat download already uses.
     """
     payload = {
         "query": _VIDEOS_QUERY,
@@ -284,10 +285,68 @@ def list_remote_vods(streamer: str) -> list[dict]:
                 "title": node["title"],
                 "user_login": user["login"],
                 "created_at": node["publishedAt"],
-                "duration": _format_duration(node["lengthSeconds"]),
+                "duration_seconds": node["lengthSeconds"] or 0,
             }
         )
     return videos
+
+
+def _meta_path(vod_id: str, streamer_dir: Path) -> Path:
+    return streamer_dir / f"{vod_id}.meta.json"
+
+
+def write_meta(streamer_dir: Path, vod_id: str, meta: dict) -> None:
+    """Persist a VOD's metadata sidecar next to its chat log.
+
+    `meta` is the GQL video object (title, lengthSeconds, publishedAt). Stored
+    so `list` can show a rich, offline view of downloaded VODs without a
+    network call. Best-effort: a sidecar write failure must not fail a fetch.
+    """
+    data = {
+        "id": vod_id,
+        "title": meta.get("title", ""),
+        "created_at": meta.get("publishedAt", ""),
+        "duration_seconds": meta.get("lengthSeconds") or 0,
+    }
+    try:
+        _meta_path(vod_id, streamer_dir).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2)
+        )
+    except OSError:
+        pass
+
+
+def local_vods(streamer: str, config: Config) -> list[dict]:
+    """Metadata for every downloaded VOD of a streamer, read from sidecars.
+
+    One dict per downloaded chat log (id, title, created_at, duration_seconds);
+    fields fall back to empty/0 when a sidecar is missing. No network. This is
+    the source of truth for `list` — downloads are never dropped just because a
+    VOD has aged off (or been removed from) Twitch's recent list.
+    """
+    streamer_dir = config.chat_dir / streamer
+    if not streamer_dir.is_dir():
+        return []
+
+    vods = []
+    for log in streamer_dir.glob("*.txt"):
+        vod_id = log.stem
+        meta_path = _meta_path(vod_id, streamer_dir)
+        meta = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                meta = {}
+        vods.append(
+            {
+                "id": vod_id,
+                "title": meta.get("title", ""),
+                "created_at": meta.get("created_at", ""),
+                "duration_seconds": meta.get("duration_seconds", 0),
+            }
+        )
+    return vods
 
 
 def downloaded_ids(streamer: str, config: Config) -> set[str]:

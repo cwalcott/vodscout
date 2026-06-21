@@ -1,5 +1,4 @@
 from collections import Counter
-from pathlib import Path
 
 import click
 
@@ -70,7 +69,8 @@ def _fetch_by_streamer(streamer: str, config: "cfg.Config", fetch_all: bool) -> 
         click.echo(f"Recent VODs for {login}{suffix}:")
         for i, v in enumerate(videos, 1):
             date = v["created_at"][:10]
-            row = f"  {i:>2}. {date}  {v['duration']:>9}  {v['title']}"
+            dur = fetcher._format_duration(v["duration_seconds"])
+            row = f"  {i:>2}. {date}  {dur:>9}  {v['title']}"
             if v["id"] in have:
                 row = click.style(f"{row}  [downloaded]", dim=True)
             click.echo(row)
@@ -105,28 +105,74 @@ def _fetch_by_streamer(streamer: str, config: "cfg.Config", fetch_all: bool) -> 
 
 @main.command("list")
 @click.argument("streamer")
+@click.option(
+    "--offline", is_flag=True, help="Don't query Twitch; show only local downloads."
+)
 @click.pass_context
-def list_vods(ctx: click.Context, streamer: str) -> None:
-    """Show downloaded VODs for a streamer."""
+def list_vods(ctx: click.Context, streamer: str, offline: bool) -> None:
+    """List a streamer's VODs: your downloads, plus recent VODs on Twitch.
+
+    Your local downloads are the source of truth and are always shown — even if
+    a VOD has aged off or been removed from Twitch. Unless --offline is given,
+    Twitch is also checked for recent VODs, so newly-available ones you haven't
+    grabbed appear alongside what you have.
+    """
     config = ctx.obj["config"]
     streamer_dir = config.chat_dir / streamer
-    if not streamer_dir.is_dir():
-        raise click.ClickException(f"No downloaded VODs for {streamer!r}.")
 
-    logs = list(streamer_dir.glob("*.txt"))
-    if not logs:
-        raise click.ClickException(f"No downloaded VODs for {streamer!r}.")
+    # Local downloads are the spine: keyed by VOD id, never dropped.
+    rows: dict[str, dict] = {}
+    for v in fetcher.local_vods(streamer, config):
+        rows[v["id"]] = {
+            **v,
+            "downloaded": True,
+            "watched": (streamer_dir / f"{v['id']}.watched.json").exists(),
+        }
 
-    # Newest first — VOD IDs increase over time, so a numeric sort puts recent
-    # VODs at the top. Fall back to string sort if an ID isn't purely numeric.
-    def sort_key(path: Path) -> tuple[int, str]:
-        stem = path.stem
-        return (int(stem) if stem.isdigit() else -1, stem)
+    login = streamer
+    note: str | None = None
+    if not offline:
+        try:
+            for v in fetcher.list_remote_vods(streamer):
+                login = v["user_login"]
+                existing = rows.get(v["id"])
+                if existing:
+                    # Top up local rows with fresh remote metadata.
+                    existing.update(
+                        title=v["title"],
+                        created_at=v["created_at"],
+                        duration_seconds=v["duration_seconds"],
+                    )
+                else:
+                    rows[v["id"]] = {**v, "downloaded": False, "watched": False}
+        except ValueError as e:  # streamer not found remotely
+            note = str(e)
+        except Exception as e:  # offline / network failure — local still shows
+            note = f"Couldn't reach Twitch ({e})."
 
-    for path in sorted(logs, key=sort_key, reverse=True):
-        watched = path.with_suffix(".watched.json").exists()
-        click.echo(f"  {path.stem}{' [watched]' if watched else ''}")
-    click.echo(f"{len(logs)} VOD(s) for {streamer}")
+    if not rows:
+        raise click.ClickException(
+            note or f"No downloaded VODs for {streamer!r}."
+        )
+
+    # Newest first by publish date; fall back to numeric id (ids grow over time).
+    def sort_key(r: dict) -> tuple[str, int]:
+        return (r["created_at"] or "", int(r["id"]) if r["id"].isdigit() else 0)
+
+    ordered = sorted(rows.values(), key=sort_key, reverse=True)
+    n_down = sum(1 for r in ordered if r["downloaded"])
+    click.echo(f"{login} — {len(ordered)} VOD(s), {n_down} downloaded")
+    for r in ordered:
+        date = (r["created_at"] or "")[:10] or "??????????"
+        dur = fetcher._format_duration(r["duration_seconds"])
+        tags = ""
+        if r["downloaded"]:
+            tags += " [downloaded]"
+        if r["watched"]:
+            tags += " [watched]"
+        click.echo(f"  {date}  {dur:>9}  {r['id']}  {r['title']}{tags}")
+    if note:
+        click.echo(note)
 
 
 @main.command()

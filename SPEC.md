@@ -43,6 +43,12 @@ the same chat-replay data established tools (`TwitchDownloaderCLI`,
 streamer-name discovery are two queries against that one endpoint. No
 Twitch Developer app, no user-supplied credentials.
 
+At download time the fetcher also writes a `<vod_id>.meta.json` sidecar
+(title, publish date, duration) next to the chat log. This lets `list`
+show a rich view of downloaded VODs offline, and feeds VOD titles into
+analyzer/emote reports. Best-effort — a sidecar write failure never fails
+the chat download.
+
 > **History / reversal.** An earlier design did streamer-name discovery
 > through Twitch's *official* Helix API, which requires each user to
 > register their own dev app (client ID + secret). That was dropped
@@ -184,8 +190,9 @@ with different highlighted intervals.
   ```
   <chat_dir>/
     <streamer>/
-      <vod_id>.txt
-      <vod_id>.watched.json
+      <vod_id>.txt            # chat log (JSON-lines)
+      <vod_id>.meta.json      # VOD metadata (title, date, duration)
+      <vod_id>.watched.json   # watched ranges
   ```
 - **Config file.** TOML, e.g. `~/.config/vodchat/config.toml`:
   ```toml
@@ -207,7 +214,8 @@ with different highlighted intervals.
 vodchat fetch --url <vod-url>          # download chat for one VOD
 vodchat fetch <streamer>               # list/pick recent VODs (no credentials)
 vodchat fetch <streamer> --all         # download all undownloaded, no prompt
-vodchat list <streamer>                # show what's downloaded locally
+vodchat list <streamer>                # your downloads + recent Twitch VODs, merged
+vodchat list <streamer> --offline      # local downloads only, no Twitch call
 vodchat emotes <vod-id>                # top emotes for one VOD
 vodchat emotes <streamer>              # top emotes across a streamer's VODs
 vodchat watched <vod-id>                # interactive watched-range editor
