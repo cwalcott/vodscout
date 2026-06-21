@@ -11,6 +11,7 @@ the shared `actions`/`vodlist` modules: analyze (overall + per-emote), top
 emotes, watched ranges (view / add / clear), download, and delete.
 """
 
+import click  # only for click.edit ($EDITOR launch); all prompts use questionary
 import questionary
 from rich.console import Console
 from rich.table import Table
@@ -185,6 +186,8 @@ def _watched_menu(row: dict, config: "cfg.Config") -> str:
         choices = [
             questionary.Choice("View ranges", value="view"),
             questionary.Choice("Add a manual range", value="add"),
+            questionary.Choice("Infer from chat", value="infer"),
+            questionary.Choice("Edit in $EDITOR", value="edit"),
         ]
         if row["watched"]:
             choices.append(questionary.Choice("Clear all ranges", value="clear"))
@@ -201,6 +204,10 @@ def _watched_menu(row: dict, config: "cfg.Config") -> str:
             _show_watched(row["id"], config)
         elif action == "add":
             _add_watched(row, config)
+        elif action == "infer":
+            _infer_watched(row, config)
+        elif action == "edit":
+            _edit_watched(row, config)
         elif action == "clear":
             _clear_watched(row, config)
 
@@ -223,6 +230,63 @@ def _add_watched(row: dict, config: "cfg.Config") -> None:
     start = an._format_timestamp(new_range.start_seconds)
     end = an._format_timestamp(new_range.end_seconds)
     console.print(f"[green]Added {start} – {end} (manual).[/]")
+
+
+def _infer_watched(row: dict, config: "cfg.Config") -> None:
+    """Suggest watched ranges from the user's own chat, then confirm a merge.
+
+    Mirrors `watched --infer`: username comes from config (prompted only if
+    unset), gap from the config threshold (no per-run prompt — matches the
+    shell's defaults-only stance; use the CLI's --gap to tune).
+    """
+    vod_id = row["id"]
+    username = config.twitch_username
+    if not username:
+        username = (
+            questionary.text("Your Twitch username (for inference):").ask() or ""
+        ).strip()
+    if not username:
+        console.print("[yellow]Need a username to infer — none given.[/]")
+        return
+    try:
+        suggested = wt.infer_from_chat(
+            vod_id, username, config.chat_dir, config.gap_threshold_seconds
+        )
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    if not suggested:
+        console.print(
+            f"[yellow]No messages from {username!r} found in this VOD's chat.[/]"
+        )
+        return
+    _render_ranges(suggested, "Suggested from your chat activity")
+    if questionary.confirm("Merge these into the watched ranges?", default=True).ask():
+        actions.add_ranges(vod_id, config, suggested)
+        row["watched"] = True
+        console.print("[green]Merged.[/]")
+    else:
+        console.print("Discarded.")
+
+
+def _edit_watched(row: dict, config: "cfg.Config") -> None:
+    """Open the VOD's .watched.json in $EDITOR (parity with `watched --edit`)."""
+    vod_id = row["id"]
+    try:
+        path = wt._watched_path(vod_id, config.chat_dir)
+    except (FileNotFoundError, ValueError) as e:
+        console.print(f"[red]{e}[/]")
+        return
+    if not path.exists():
+        wt.save(wt.WatchedRanges([], ""), vod_id, config.chat_dir)
+    click.edit(filename=str(path))
+    try:
+        loaded = wt.load(vod_id, config.chat_dir)  # validate it still parses
+    except (ValueError, KeyError) as e:
+        console.print(f"[red]Couldn't parse the edited file: {e}[/]")
+        return
+    row["watched"] = bool(loaded.ranges)
+    console.print("[green]Saved.[/]")
 
 
 def _download(vod_id: str, config: "cfg.Config") -> bool:
@@ -342,14 +406,20 @@ def _show_watched(vod_id: str, config: "cfg.Config") -> None:
     if not watched_ranges.ranges:
         console.print("[yellow]No watched ranges recorded.[/]")
         return
-    console.print(f"\n[bold]Watched ranges — VOD {vod_id}[/]")
+    _render_ranges(watched_ranges.ranges, f"Watched ranges — VOD {vod_id}")
+
+
+def _render_ranges(ranges: list["wt.WatchedRange"], header: str) -> None:
+    """Print a list of watched ranges with a header and a total. Shared by the
+    saved-ranges view and the infer-from-chat preview."""
+    console.print(f"\n[bold]{header}[/]")
     total = 0
-    for r in watched_ranges.ranges:
+    for r in ranges:
         start = an._format_timestamp(r.start_seconds)
         end = an._format_timestamp(r.end_seconds)
         console.print(f"  {start} – {end}  [dim]({r.source})[/]")
         total += r.end_seconds - r.start_seconds
-    console.print(f"Total watched: {an._format_timestamp(total)}")
+    console.print(f"Total: {an._format_timestamp(total)}")
 
 
 def _print_vod(row: dict, login: str) -> None:
