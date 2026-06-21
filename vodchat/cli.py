@@ -260,7 +260,11 @@ def watched(
                     "No username for --infer. Pass --user <login> or set "
                     "twitch_username in your config."
                 )
-            gap = gap_seconds if gap_seconds is not None else config.gap_threshold_seconds
+            gap = (
+                gap_seconds
+                if gap_seconds is not None
+                else config.gap_threshold_seconds
+            )
             suggested = wt.infer_from_chat(vod_id, username, chat_dir, gap)
             if not suggested:
                 click.echo(f"No messages from {username!r} found in this VOD's chat.")

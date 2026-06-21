@@ -16,7 +16,8 @@ class Config:
     twitch_username: str = ""
     # Detection thresholds — overridable via [analysis] in config.toml
     bucket_seconds: int = 60
-    gap_threshold_seconds: int = 180  # silence past this splits watched-inference sessions
+    # silence past this (seconds) splits watched-inference sessions
+    gap_threshold_seconds: int = 180
 
 
 def load() -> "Config":
