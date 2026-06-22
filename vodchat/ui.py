@@ -7,18 +7,20 @@ so the rest of the package carries no interactive-UI dependency.
 Flow: a VOD *list* screen (the streamer's merged local+remote VODs); selecting a
 VOD pushes a full *VOD window* with top moments (left) and emotes (right) side by
 side, a `w` All/Unwatched toggle that drives the moment list, and `f` to favorite
-an emote (pinned first). The list, moments, emotes, and favorite persistence
-(a `<streamer>/favorites.json` sidecar) are real now — watched-editing is the
-remaining stub (slice 4).
+an emote (pinned first). All wired to the real legs: list/moments/emotes, the
+`<streamer>/favorites.json` favorites sidecar, and watched tracking — auto-inferred
+from your chat on first open of a VOD, with `e` to edit the ranges inline and `i`
+to re-infer.
 """
 
 import webbrowser
 from collections import Counter
 
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal
-from textual.screen import Screen
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen, Screen
+from textual.widgets import DataTable, Footer, Header, Static, TextArea
 
 from vodchat import actions, fetcher, vodlist
 from vodchat import analyzer as an
@@ -110,6 +112,8 @@ class VodScreen(Screen):
     BINDINGS = [
         ("escape", "app.pop_screen", "Back"),
         ("w", "toggle_mode", "All/Unwatched"),
+        ("e", "edit", "Edit watched"),
+        ("i", "infer", "Infer watched"),
         ("f", "favorite", "★ emote"),
         ("o", "overall", "Overall"),
         ("q", "app.quit", "Quit"),
@@ -144,14 +148,16 @@ class VodScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        self._refresh_header()
         if not self.vod["downloaded"]:
+            self._refresh_header()
             return
         self.query_one("#moments", DataTable).border_title = "Top moments"
         self.query_one(
             "#emotes", DataTable
         ).border_title = "Emotes  (f: ★ · tab: focus)"
         self.favorites = fav.load(self._streamer, self.app.config.chat_dir)
+        self._auto_infer()
+        self._refresh_header()
         self._load_moments()
         self._load_emotes()
         self._populate_moments()
@@ -183,6 +189,36 @@ class VodScreen(Screen):
         except (FileNotFoundError, ValueError) as e:
             self._emote_counts = Counter()
             self.notify(str(e), severity="error")
+
+    def _recompute_coverage(self) -> None:
+        """Refresh the row's watched_seconds after a watched-range change."""
+        self.vod["watched_seconds"] = _watched_seconds(self.vod["id"], self.app.config)
+
+    def _auto_infer(self) -> None:
+        """On first open of a VOD with no watched file, infer watched ranges from
+        the user's own chat and persist them — but only if non-empty, so an empty
+        result leaves no file (and no false 'has watched data' flag). No-op without
+        a configured twitch_username."""
+        config = self.app.config
+        if not config.twitch_username:
+            return
+        try:
+            if wt._watched_path(self.vod["id"], config.chat_dir).exists():
+                return  # already has watched data — never infer over it
+            suggested = wt.infer_from_chat(
+                self.vod["id"],
+                config.twitch_username,
+                config.chat_dir,
+                config.gap_threshold_seconds,
+            )
+        except (FileNotFoundError, ValueError):
+            return
+        if suggested:
+            actions.add_ranges(self.vod["id"], config, suggested)
+            self._recompute_coverage()
+            self.notify(
+                f"Auto-inferred {len(suggested)} watched range(s) from your chat."
+            )
 
     # --- rendering -------------------------------------------------------
 
@@ -261,6 +297,52 @@ class VodScreen(Screen):
             self._refresh_header()
             self._populate_moments()
 
+    def action_edit(self) -> None:
+        """Open the inline watched-range editor; refresh on save."""
+        if not self.vod["downloaded"]:
+            return
+
+        def after(saved: bool | None) -> None:
+            if saved:
+                self._recompute_coverage()
+                self._refresh_header()
+                self._load_moments()
+                self._populate_moments()
+                self.notify("Watched ranges saved.")
+
+        self.app.push_screen(WatchedEditScreen(self.vod["id"], self.app.config), after)
+
+    def action_infer(self) -> None:
+        """Re-infer watched ranges from the user's chat and merge them in."""
+        if not self.vod["downloaded"]:
+            return
+        config = self.app.config
+        if not config.twitch_username:
+            self.notify("Set twitch_username in config to infer.", severity="warning")
+            return
+        try:
+            suggested = wt.infer_from_chat(
+                self.vod["id"],
+                config.twitch_username,
+                config.chat_dir,
+                config.gap_threshold_seconds,
+            )
+        except (FileNotFoundError, ValueError) as e:
+            self.notify(str(e), severity="error")
+            return
+        if not suggested:
+            self.notify(
+                f"No messages from {config.twitch_username!r} in this chat.",
+                severity="warning",
+            )
+            return
+        actions.add_ranges(self.vod["id"], config, suggested)
+        self._recompute_coverage()
+        self._refresh_header()
+        self._load_moments()
+        self._populate_moments()
+        self.notify(f"Inferred {len(suggested)} range(s) (merged).")
+
     def action_favorite(self) -> None:
         if not self.vod["downloaded"]:
             return
@@ -297,6 +379,69 @@ class VodScreen(Screen):
                 self._populate_moments()
 
 
+class WatchedEditScreen(ModalScreen[bool]):
+    """Inline editor for a VOD's watched ranges, one `H:MM:SS-H:MM:SS` per line.
+
+    Editing is authoritative — a full replace, not a merge: deleting a line drops
+    that range, and clearing the box clears the ranges. Each line is parsed by
+    `watched.parse_range`, so open-ended forms (e.g. `2:00:00-end`) still work; a
+    bad line shows an error and keeps the editor open. Dismisses True on save,
+    False on cancel.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("ctrl+s", "save", "Save", priority=True),
+    ]
+
+    def __init__(self, vod_id: str, config: "cfg.Config") -> None:
+        super().__init__()
+        self.vod_id = vod_id
+        self.config = config
+
+    def compose(self) -> ComposeResult:
+        ranges = wt.load(self.vod_id, self.config.chat_dir).ranges
+        initial = "\n".join(
+            f"{an._format_timestamp(r.start_seconds)}-"
+            f"{an._format_timestamp(r.end_seconds)}"
+            for r in ranges
+        )
+        with Vertical(id="editbox"):
+            yield Static(
+                "Edit watched ranges — one per line · H:MM:SS-H:MM:SS\n"
+                "[dim]ctrl-s save · esc cancel[/dim]",
+                id="edithint",
+            )
+            yield TextArea(initial, id="editarea")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+    def action_save(self) -> None:
+        text = self.query_one("#editarea", TextArea).text
+        parsed: list[wt.WatchedRange] = []
+        for line in (ln.strip() for ln in text.splitlines()):
+            if not line:
+                continue
+            try:
+                parsed.append(
+                    wt.parse_range(
+                        line,
+                        end_resolver=lambda: wt.vod_end_seconds(
+                            self.vod_id, self.config.chat_dir
+                        ),
+                    )
+                )
+            except (ValueError, FileNotFoundError) as e:
+                self.notify(f"{line!r}: {e}", severity="error")
+                return
+        if parsed:
+            wt.save(wt.WatchedRanges(parsed, ""), self.vod_id, self.config.chat_dir)
+        else:
+            wt.clear(self.vod_id, self.config.chat_dir)
+        self.dismiss(True)
+
+
 class VodchatApp(App):
     """Top-level Textual app. Holds the cross-screen state the screens read:
     the resolved config, the current streamer, and the offline flag."""
@@ -309,6 +454,14 @@ class VodchatApp(App):
     #moments { width: 2fr; border: round $primary; }
     #emotes { width: 1fr; border: round $primary; }
     #placeholder { height: 1fr; padding: 2; }
+
+    WatchedEditScreen { align: center middle; }
+    #editbox {
+        width: 72; height: auto; padding: 1 2;
+        background: $surface; border: round $accent;
+    }
+    #edithint { height: auto; padding-bottom: 1; }
+    #editarea { height: 12; }
     """
 
     def __init__(

@@ -100,12 +100,13 @@ activity in that VOD.
   silence doesn't mean not-watching, and it's blind to VODs watched
   without chatting at all.
 
-**Entry point.** `vodchat watched <vod-id>` shows current ranges; edits
+**Entry point.** `vodchat watched <vod-id>` shows current ranges; CLI edits
 are flag-driven: `--add START-END` (manual range), `--infer` (suggest from
-your chat, with `--user`/`--gap`), `--edit` ($EDITOR). The originally-
-envisioned interactive REPL — drop into a session that offers add/infer/
-timeline and confirm-save — was deferred (its exact prompts are an open
-question, easier to feel out later); see DECISIONS.md 2026-06-20.
+your chat, with `--user`/`--gap`), `--edit` ($EDITOR). The originally-envisioned
+interactive editing — deferred on the CLI side as an open question — now lives in
+the **TUI** instead: a VOD with no watched data auto-infers from your chat on
+first open, `e` opens an inline range editor (one `H:MM:SS-H:MM:SS` per line; save
+is a full replace), and `i` re-infers; see DECISIONS.md 2026-06-21.
 
 **Editing.** Should support: interactive add/toggle from the inferred
 suggestion list, direct edit of the underlying file via `$EDITOR`, and
@@ -212,8 +213,9 @@ Enter to drill into a full-screen VOD **window** showing top moments (left) and
 emotes (right) side by side. In the window: `w` toggles All/Unwatched (drives the
 moment list), Enter opens a moment's timestamped link or drills into an emote's
 own spikes, `f` favorites an emote (pinned first), Esc returns to the list.
-Watched-range coverage shows in the window; inline editing + auto-infer are
-planned there too (see the watched section).
+Watched tracking lives here too: coverage shows in the window, a VOD with no
+watched data auto-infers from your chat on first open, `e` opens an inline range
+editor, and `i` re-infers (see the watched section).
 
 Implementation is contained in `ui.py`: the three legs never import it, and all
 interactive-UI dependencies live there. Built as a full-screen **Textual** TUI

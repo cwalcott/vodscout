@@ -15,6 +15,32 @@ Format:
 
 ---
 
+## 2026-06-21 — TUI slice 4: watched (auto-infer on open + inline editor)
+
+- Built watched tracking in the TUI as designed (see the "watched in the TUI:
+  design" note below). Coverage already showed in the list/header since slice 1;
+  this adds the editing:
+  - **Auto-infer on first open**: opening a downloaded VOD with no `.watched.json`
+    (and `twitch_username` set) runs `infer_from_chat` and persists via
+    `actions.add_ranges` — only if non-empty, so an empty result writes no file and
+    the VOD isn't falsely flagged as having watched data. `i` re-infers on demand
+    (merges).
+  - **Inline editor (`e`)**: a `WatchedEditScreen` modal (TextArea prefilled with
+    current ranges, one `H:MM:SS-H:MM:SS` per line). Save (ctrl-s) is a full
+    *replace* — parse each line via `parse_range` → `watched.save`; an empty box →
+    `watched.clear`. So deleting a line drops that range, which is exactly why no
+    "carve" leg verb was needed. A bad line shows an error and keeps the editor
+    open; esc cancels.
+  - Any watched change recomputes the row's coverage and re-filters the Unwatched
+    moments immediately.
+- No new leg code — reuses `watched.py` (`infer_from_chat`/`parse_range`/`save`/
+  `clear`/`vod_end_seconds`) and `actions.add_ranges`. UI stays untested per
+  convention; the leg functions it calls are covered in `test_watched`.
+- Realizes the long-deferred "interactive watched editing" (SPEC's REPL idea) as a
+  text box + auto-infer rather than a prompt sequence. With this, the TUI rebuild
+  is feature-complete (slices 0–4); `_fixtures.py` is already gone, so the planned
+  slice 5 was just this docs pass.
+
 ## 2026-06-21 — TUI slice 3: favorite emotes persisted; ranking boost dropped
 
 - Favorites now persist as a per-streamer `<chat_dir>/<streamer>/favorites.json`
