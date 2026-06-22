@@ -15,6 +15,17 @@ Format:
 
 ---
 
+## 2026-06-21 — TUI: VOD list loads local-only, `r` refreshes from Twitch
+
+- Resolved the slice-1 follow-up (the list hit Twitch synchronously on launch,
+  freezing the UI for a beat). `on_mount` now loads local downloads only (instant,
+  no network); `r` triggers the remote merge via `merged_vods`. `--offline` keeps
+  `r` local (it just re-reads disk). An empty local list, when remote is available,
+  hints "press r to fetch from Twitch".
+- Chose this over a background worker + "Loading…" state (user's call): simpler,
+  and a deliberate keypress to hit the network fits a local-first tool. The worker
+  stays an option if a non-blocking refresh is wanted later.
+
 ## 2026-06-21 — TUI slice 4: watched (auto-infer on open + inline editor)
 
 - Built watched tracking in the TUI as designed (see the "watched in the TUI:

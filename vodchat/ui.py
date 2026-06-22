@@ -4,9 +4,10 @@ This is a second consumer of fetcher/watched/analyzer (alongside cli.py). The
 three legs never import this module, and all the Textual interaction lives here,
 so the rest of the package carries no interactive-UI dependency.
 
-Flow: a VOD *list* screen (the streamer's merged local+remote VODs); selecting a
-VOD pushes a full *VOD window* with top moments (left) and emotes (right) side by
-side, a `w` All/Unwatched toggle that drives the moment list, and `f` to favorite
+Flow: a VOD *list* screen (local downloads by default; `r` refreshes from Twitch);
+selecting a VOD pushes a full *VOD window* with top moments (left) and emotes
+(right) side by side, a `w` All/Unwatched toggle that drives the moment list, and
+`f` to favorite
 an emote (pinned first). All wired to the real legs: list/moments/emotes, the
 `<streamer>/favorites.json` favorites sidecar, and watched tracking — auto-inferred
 from your chat on first open of a VOD, with `e` to edit the ranges inline and `i`
@@ -49,10 +50,14 @@ def _watched_seconds(vod_id: str, config: "cfg.Config") -> int:
 
 
 class VodListScreen(Screen):
-    """The streamer's VOD list. Enter drills into a VOD window."""
+    """The streamer's VOD list.
+
+    Loads local downloads only on open (instant, no network); `r` refreshes from
+    Twitch, merging in new VODs. Enter drills into a VOD window.
+    """
 
     BINDINGS = [
-        ("r", "refresh", "Refresh"),
+        ("r", "refresh", "Refresh from Twitch"),
         ("q", "app.quit", "Quit"),
     ]
 
@@ -65,16 +70,16 @@ class VodListScreen(Screen):
         table = self.query_one("#vodlist", DataTable)
         table.add_columns("date", "length", "title", "watched", "")
         self._rows: dict[str, dict] = {}
-        self._populate()
+        self._populate(offline=True)  # local-only on launch — no startup freeze
         table.focus()
 
-    def _populate(self) -> None:
+    def _populate(self, offline: bool) -> None:
         table = self.query_one("#vodlist", DataTable)
         table.clear()
         self._rows = {}
         try:
             rows, login, note = vodlist.merged_vods(
-                self.app.streamer, self.app.config, self.app.offline
+                self.app.streamer, self.app.config, offline
             )
         except Exception as e:
             self.notify(f"Couldn't load VODs: {e}", severity="error")
@@ -95,7 +100,11 @@ class VodListScreen(Screen):
         if note:
             self.notify(note, severity="warning")
         elif not rows:
-            self.notify("No VODs found.", severity="warning")
+            # Local-only with remote available: point them at the refresh key.
+            if offline and not self.app.offline:
+                self.notify("No local VODs — press r to fetch from Twitch.")
+            else:
+                self.notify("No VODs found.", severity="warning")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         vod = self._rows.get(event.row_key.value)
@@ -103,7 +112,12 @@ class VodListScreen(Screen):
             self.app.push_screen(VodScreen(vod))
 
     def action_refresh(self) -> None:
-        self._populate()
+        # r hits Twitch — unless the app was launched with --offline, which keeps
+        # it local (r then just re-reads disk).
+        self._populate(offline=self.app.offline)
+        self.notify(
+            "Reloaded local VODs." if self.app.offline else "Refreshed from Twitch."
+        )
 
 
 class VodScreen(Screen):

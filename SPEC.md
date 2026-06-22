@@ -208,8 +208,9 @@ that context.
 It is a *second consumer* of the three legs' APIs, parallel to `cli.py` — not a
 new leg. Session state is just the **current streamer** (its merged VOD list)
 and the **selected VOD**. Flow: resolve a streamer (arg → `default_streamer`
-config key → prompt) → arrow through the merged local+remote VOD **list** → press
-Enter to drill into a full-screen VOD **window** showing top moments (left) and
+config key → prompt) → arrow through the VOD **list** (local downloads on open;
+`r` refreshes from Twitch) → press Enter to drill into a full-screen VOD
+**window** showing top moments (left) and
 emotes (right) side by side. In the window: `w` toggles All/Unwatched (drives the
 moment list), Enter opens a moment's timestamped link or drills into an emote's
 own spikes, `f` favorites an emote (pinned first), Esc returns to the list.
