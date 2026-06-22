@@ -15,6 +15,31 @@ Format:
 
 ---
 
+## 2026-06-22 — recent-VOD metadata cache (undownloaded VODs show at startup)
+
+- A Twitch refresh now caches a `.meta.json` sidecar for **every** recent VOD,
+  not just downloaded ones (`fetcher.write_remote_meta`, written from a
+  normalized `list_remote_vods` row; `write_meta` and it now share a private
+  `_write_meta_file`). For an undownloaded VOD the sidecar is its only on-disk
+  trace, so a later **offline** load surfaces it — the TUI's local-only startup
+  (`_populate(offline=True)`, the f815a25 decision) now shows the ~10 recent VODs
+  including ones not downloaded, with no network call and no manual `r`.
+- New `fetcher.cached_vods(streamer, config)`: recent VODs with a sidecar but no
+  `.txt` (downloaded ones are `local_vods`' job). `merged_vods` seeds rows from
+  both, then `setdefault`s so a real download always wins over a cache entry.
+- **Prune on refresh:** undownloaded cache entries no longer in Twitch's recent
+  list are dropped (row + sidecar) so the list stays "your downloads + Twitch's
+  recent VODs" and the cache can't grow unbounded. Downloaded VODs are *never*
+  pruned (the "don't lose downloads" rule) — they're kept even after aging off
+  Twitch. Pruning only runs on a **successful** remote fetch: a network failure
+  preserves the cache (and still returns local + cached rows with a note).
+- Chose "cache only, no auto-network on launch" (user's call) over a background
+  auto-refresh worker: keeps the local-first, zero-network startup of f815a25;
+  the cache is what makes that startup rich. Trade-off: the very first launch
+  (cold cache) still needs one `r` to populate, and `r` is still how you pull
+  newly-aired VODs. Cross-front-end: `vods <streamer>` seeds the same cache, and
+  `vods --offline` now shows cached undownloaded VODs too.
+
 ## 2026-06-21 — TUI: VOD list loads local-only, `r` refreshes from Twitch
 
 - Resolved the slice-1 follow-up (the list hit Twitch synchronously on launch,

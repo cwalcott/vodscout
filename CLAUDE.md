@@ -28,8 +28,10 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 
 - Chat logs and their sidecars live under a configurable root, organized
   by streamer: `<chat_dir>/<streamer>/<vod_id>.txt` (chat log),
-  `.meta.json` (VOD title/date/duration, written at fetch time), and
-  `.watched.json` (watched ranges).
+  `.meta.json` (VOD title/date/duration — written at fetch time, and also
+  cached for recent VODs on a Twitch refresh so undownloaded ones show
+  offline; a `.meta.json` without a `.txt` is an undownloaded cache entry),
+  and `.watched.json` (watched ranges).
 - Detection thresholds (bucket size, gap threshold) are overridable via
   config. Spike detection uses a top-N approach — no multiplier threshold;
   see DECISIONS.md. `analyze` has two views: overall chat-volume moments

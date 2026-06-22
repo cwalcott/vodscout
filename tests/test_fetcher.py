@@ -1,12 +1,17 @@
+import json
+
 import pytest
 
 from vodchat.config import Config
 from vodchat.fetcher import (
     _scan_third_party,
     _vod_id_from_url,
+    cached_vods,
     downloaded_ids,
     parse_selection,
+    remove_cached_meta,
     undownloaded_vods,
+    write_remote_meta,
 )
 
 
@@ -104,6 +109,56 @@ def test_undownloaded_vods_no_local_dir(tmp_path):
     videos = [_vod("111"), _vod("222")]
     result = undownloaded_vods(videos, "shroud", config)
     assert [v["id"] for v in result] == ["111", "222"]
+
+
+def _remote_row(vid):
+    return {
+        "id": vid,
+        "title": f"title {vid}",
+        "user_login": "shroud",
+        "created_at": "2026-06-20T00:00:00Z",
+        "duration_seconds": 3600,
+    }
+
+
+def test_cached_vods_excludes_downloaded_and_reads_sidecar(tmp_path):
+    config = Config(chat_dir=tmp_path)
+    streamer_dir = tmp_path / "shroud"
+    streamer_dir.mkdir()
+    write_remote_meta(streamer_dir, _remote_row("111"))  # downloaded below
+    write_remote_meta(streamer_dir, _remote_row("222"))  # cache-only
+    (streamer_dir / "111.txt").write_text("")  # 111 is downloaded
+
+    result = cached_vods("shroud", config)
+    assert [v["id"] for v in result] == ["222"]
+    assert result[0]["title"] == "title 222"
+    assert result[0]["duration_seconds"] == 3600
+
+
+def test_cached_vods_no_dir(tmp_path):
+    assert cached_vods("nobody", Config(chat_dir=tmp_path)) == []
+
+
+def test_cached_vods_skips_unreadable_sidecar(tmp_path):
+    config = Config(chat_dir=tmp_path)
+    streamer_dir = tmp_path / "shroud"
+    streamer_dir.mkdir()
+    (streamer_dir / "222.meta.json").write_text("{not valid json")
+    write_remote_meta(streamer_dir, _remote_row("333"))
+
+    assert [v["id"] for v in cached_vods("shroud", config)] == ["333"]
+
+
+def test_remove_cached_meta(tmp_path):
+    streamer_dir = tmp_path / "shroud"
+    streamer_dir.mkdir()
+    write_remote_meta(streamer_dir, _remote_row("222"))
+    meta_path = streamer_dir / "222.meta.json"
+    assert json.loads(meta_path.read_text())["id"] == "222"
+
+    remove_cached_meta(streamer_dir, "222")
+    assert not meta_path.exists()
+    remove_cached_meta(streamer_dir, "222")  # idempotent — no error when missing
 
 
 def test_downloaded_ids(tmp_path):

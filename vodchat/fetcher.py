@@ -295,23 +295,67 @@ def _meta_path(vod_id: str, streamer_dir: Path) -> Path:
     return streamer_dir / f"{vod_id}.meta.json"
 
 
+_META_SUFFIX = ".meta.json"
+
+
+def _write_meta_file(streamer_dir: Path, data: dict) -> None:
+    """Write a `{id,title,created_at,duration_seconds}` sidecar. Best-effort:
+    a write failure must never fail the fetch/refresh that triggered it."""
+    try:
+        _meta_path(data["id"], streamer_dir).write_text(
+            json.dumps(data, ensure_ascii=False, indent=2)
+        )
+    except OSError:
+        pass
+
+
 def write_meta(streamer_dir: Path, vod_id: str, meta: dict) -> None:
-    """Persist a VOD's metadata sidecar next to its chat log.
+    """Persist a downloaded VOD's metadata sidecar next to its chat log.
 
     `meta` is the GQL video object (title, lengthSeconds, publishedAt). Stored
     so `list` can show a rich, offline view of downloaded VODs without a
     network call. Best-effort: a sidecar write failure must not fail a fetch.
     """
-    data = {
-        "id": vod_id,
-        "title": meta.get("title", ""),
-        "created_at": meta.get("publishedAt", ""),
-        "duration_seconds": meta.get("lengthSeconds") or 0,
-    }
+    _write_meta_file(
+        streamer_dir,
+        {
+            "id": vod_id,
+            "title": meta.get("title", ""),
+            "created_at": meta.get("publishedAt", ""),
+            "duration_seconds": meta.get("lengthSeconds") or 0,
+        },
+    )
+
+
+def write_remote_meta(streamer_dir: Path, video: dict) -> None:
+    """Cache a recent-VOD sidecar from a `list_remote_vods` row (already
+    normalized to id/title/created_at/duration_seconds).
+
+    Written on every Twitch refresh for *all* recent VODs, including ones not
+    yet downloaded — the sidecar is then the only on-disk trace of an
+    undownloaded VOD, which is what lets the list show recent VODs at startup
+    with no network call. Best-effort, same as `write_meta`.
+    """
+    _write_meta_file(
+        streamer_dir,
+        {
+            "id": video["id"],
+            "title": video.get("title", ""),
+            "created_at": video.get("created_at", ""),
+            "duration_seconds": video.get("duration_seconds", 0),
+        },
+    )
+
+
+def remove_cached_meta(streamer_dir: Path, vod_id: str) -> None:
+    """Delete an undownloaded VOD's cached sidecar (best-effort).
+
+    Used to prune cache entries that have aged off Twitch's recent list. Only
+    ever called for VODs with no chat log — a downloaded VOD's sidecar is real
+    metadata, not cache, and is never removed this way.
+    """
     try:
-        _meta_path(vod_id, streamer_dir).write_text(
-            json.dumps(data, ensure_ascii=False, indent=2)
-        )
+        _meta_path(vod_id, streamer_dir).unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -338,6 +382,38 @@ def local_vods(streamer: str, config: Config) -> list[dict]:
                 meta = json.loads(meta_path.read_text())
             except (OSError, json.JSONDecodeError):
                 meta = {}
+        vods.append(
+            {
+                "id": vod_id,
+                "title": meta.get("title", ""),
+                "created_at": meta.get("created_at", ""),
+                "duration_seconds": meta.get("duration_seconds", 0),
+            }
+        )
+    return vods
+
+
+def cached_vods(streamer: str, config: Config) -> list[dict]:
+    """Metadata for recent VODs cached but NOT downloaded (sidecar, no chat log).
+
+    These are the recent-VOD entries persisted by `write_remote_meta` on the
+    last Twitch refresh, so the list can show them offline at startup. A VOD
+    whose chat log is on disk is a *download* (see `local_vods`), not a cache
+    entry, and is excluded here. Same dict shape as `local_vods`.
+    """
+    streamer_dir = config.chat_dir / streamer
+    if not streamer_dir.is_dir():
+        return []
+
+    vods = []
+    for meta_path in streamer_dir.glob(f"*{_META_SUFFIX}"):
+        vod_id = meta_path.name[: -len(_META_SUFFIX)]
+        if not vod_id or (streamer_dir / f"{vod_id}.txt").exists():
+            continue  # downloaded — handled by local_vods
+        try:
+            meta = json.loads(meta_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
         vods.append(
             {
                 "id": vod_id,

@@ -47,7 +47,11 @@ At download time the fetcher also writes a `<vod_id>.meta.json` sidecar
 (title, publish date, duration) next to the chat log. This lets `list`
 show a rich view of downloaded VODs offline, and feeds VOD titles into
 analyzer/emote reports. Best-effort — a sidecar write failure never fails
-the chat download.
+the chat download. A Twitch refresh additionally caches a `.meta.json` for
+every *recent* VOD, including ones not downloaded — that cache is the only
+on-disk trace of an undownloaded VOD, so the next offline load can show
+recent VODs (downloaded or not) with no network call (see DECISIONS
+2026-06-22).
 
 > **History / reversal.** An earlier design did streamer-name discovery
 > through Twitch's *official* Helix API, which requires each user to
@@ -208,8 +212,10 @@ that context.
 It is a *second consumer* of the three legs' APIs, parallel to `cli.py` — not a
 new leg. Session state is just the **current streamer** (its merged VOD list)
 and the **selected VOD**. Flow: resolve a streamer (arg → `default_streamer`
-config key → prompt) → arrow through the VOD **list** (local downloads on open;
-`r` refreshes from Twitch) → press Enter to drill into a full-screen VOD
+config key → prompt) → arrow through the VOD **list** (on open: your downloads
+plus recent VODs cached from the last refresh, so even not-yet-downloaded ones
+show with no network call; `r` refreshes from Twitch and re-caches) → press
+Enter to drill into a full-screen VOD
 **window** showing top moments (left) and
 emotes (right) side by side. In the window: `w` toggles All/Unwatched (drives the
 moment list), Enter opens a moment's timestamped link or drills into an emote's
