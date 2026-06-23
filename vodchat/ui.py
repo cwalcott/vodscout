@@ -5,17 +5,18 @@ three legs never import this module, and all the Textual interaction lives here,
 so the rest of the package carries no interactive-UI dependency.
 
 Flow: a VOD *list* screen (downloads + recent VODs cached from the last refresh;
-`r` refreshes from Twitch, `d` downloads the highlighted VOD); selecting a VOD
-pushes a full *VOD window* with top moments (left) and emotes
+`r` refreshes from Twitch, `d` downloads the highlighted VOD); selecting a
+*downloaded* VOD pushes a full *VOD window* with top moments (left) and emotes
 (right) side by side, a `w` All/Unwatched toggle that drives the moment list, and
 `f` to favorite
 an emote (pinned first). All wired to the real legs: list/moments/emotes, the
 `<streamer>/favorites.json` favorites sidecar, and watched tracking — auto-inferred
 from your chat on first open of a VOD, with `e` to edit the ranges inline and `i`
-to re-infer. An undownloaded VOD can be downloaded with `d` from the list or the
-window; the fetch runs as a background worker on the (always-mounted) list
-screen, so it doesn't block — you keep browsing while it downloads, the row
-shows a live message count, and it flips to downloaded when it finishes.
+to re-infer. An undownloaded VOD has no window to open, so selecting one instead
+asks to confirm a download (or `d` grabs the highlighted row without the prompt).
+The fetch runs as a background worker on the (always-mounted) list screen, so it
+doesn't block — you keep browsing while it downloads, the row shows a live
+message count, and it flips to downloaded when it finishes.
 """
 
 import threading
@@ -130,8 +131,28 @@ class VodListScreen(Screen):
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         vod = self._rows.get(event.row_key.value)
-        if vod:
+        if not vod:
+            return
+        if vod["downloaded"]:
             self.app.push_screen(VodScreen(vod))
+            return
+        # Undownloaded: there's nothing to show until the chat is fetched, so
+        # offer to grab it instead of opening an empty window.
+        if vod["id"] in self._downloading:
+            self.notify(f"{vod['id']} is already downloading.")
+            return
+        if self.app.offline:
+            self.notify(
+                "Offline — relaunch without --offline to download.",
+                severity="warning",
+            )
+            return
+
+        def after(confirm: bool | None) -> None:
+            if confirm:
+                self.start_download(vod["id"])
+
+        self.app.push_screen(ConfirmDownloadScreen(vod, self.app.streamer), after)
 
     def action_refresh(self) -> None:
         # r hits Twitch — unless the app was launched with --offline, which keeps
@@ -263,12 +284,6 @@ class VodListScreen(Screen):
             return
         self.refresh_row(vod_id)
         self.notify(f"Downloaded {vod_id}.")
-        # If the user is still sitting on this VOD's window, rebuild it in place
-        # so its moments/emotes appear; otherwise the row update is enough.
-        top = self.app.screen
-        if isinstance(top, VodScreen) and top.vod.get("id") == vod_id:
-            top.vod["downloaded"] = True
-            self.app.switch_screen(VodScreen(top.vod))
 
     def refresh_row(self, vod_id: str) -> None:
         """Flip one row to downloaded in place — no full re-populate, so the
@@ -309,7 +324,6 @@ class VodScreen(Screen):
         ("i", "infer", "Infer watched"),
         ("f", "favorite", "★ emote"),
         ("o", "overall", "Overall"),
-        ("d", "download", "Download chat"),
         ("q", "app.quit", "Quit"),
     ]
 
@@ -329,22 +343,12 @@ class VodScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="vodheader")
-        if self.vod["downloaded"]:
-            with Horizontal(id="panes"):
-                yield DataTable(id="moments", cursor_type="row", zebra_stripes=True)
-                yield DataTable(id="emotes", cursor_type="row", zebra_stripes=True)
-        else:
-            yield Static(
-                "\n  [dim]Not downloaded yet — press [b]d[/b] to download its "
-                "chat, then its moments and emotes appear here.[/dim]",
-                id="placeholder",
-            )
+        with Horizontal(id="panes"):
+            yield DataTable(id="moments", cursor_type="row", zebra_stripes=True)
+            yield DataTable(id="emotes", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
-        if not self.vod["downloaded"]:
-            self._refresh_header()
-            return
         self.query_one("#moments", DataTable).border_title = "Top moments"
         self.query_one(
             "#emotes", DataTable
@@ -478,47 +482,19 @@ class VodScreen(Screen):
     # --- actions ---------------------------------------------------------
 
     def action_toggle_mode(self) -> None:
-        if not self.vod["downloaded"]:
-            return
         self.show_all = not self.show_all
         self._refresh_header()
         self._populate_moments()
 
     def action_overall(self) -> None:
-        if self.vod["downloaded"] and self.current_emote is not None:
+        if self.current_emote is not None:
             self.current_emote = None
             self._load_moments()
             self._refresh_header()
             self._populate_moments()
 
-    def action_download(self) -> None:
-        """Kick off a background download for this VOD. Non-blocking: the worker
-        lives on the list screen, so you can Esc back and keep browsing. When it
-        finishes, the list rebuilds this window in place (see
-        VodListScreen._finish_download)."""
-        if self.vod["downloaded"]:
-            return
-        for screen in self.app.screen_stack:
-            if isinstance(screen, VodListScreen):
-                screen.start_download(self.vod["id"])
-                break
-        if self.vod["id"] in self._list_downloading:
-            self.query_one("#placeholder", Static).update(
-                "\n  [dim]Downloading its chat in the background… press [b]Esc[/b] "
-                "to keep browsing — this view fills in when it finishes.[/dim]"
-            )
-
-    @property
-    def _list_downloading(self) -> dict:
-        for screen in self.app.screen_stack:
-            if isinstance(screen, VodListScreen):
-                return screen._downloading
-        return {}
-
     def action_edit(self) -> None:
         """Open the inline watched-range editor; refresh on save."""
-        if not self.vod["downloaded"]:
-            return
 
         def after(saved: bool | None) -> None:
             if saved:
@@ -532,8 +508,6 @@ class VodScreen(Screen):
 
     def action_infer(self) -> None:
         """Re-infer watched ranges from the user's chat and merge them in."""
-        if not self.vod["downloaded"]:
-            return
         config = self.app.config
         if not config.twitch_username:
             self.notify("Set twitch_username in config to infer.", severity="warning")
@@ -562,8 +536,6 @@ class VodScreen(Screen):
         self.notify(f"Inferred {len(suggested)} range(s) (merged).")
 
     def action_favorite(self) -> None:
-        if not self.vod["downloaded"]:
-            return
         table = self.query_one("#emotes", DataTable)
         if not table.has_focus:
             self.notify("Tab to the Emotes pane first, then f to favorite.")
@@ -595,6 +567,46 @@ class VodScreen(Screen):
                 self._load_moments()
                 self._refresh_header()
                 self._populate_moments()
+
+
+class ConfirmDownloadScreen(ModalScreen[bool]):
+    """Confirm-before-download dialog, shown when you open an undownloaded VOD.
+
+    Requires an explicit `y` to start the (background) download; `n` or `esc`
+    backs out. Enter is deliberately not bound — the same key that opened this
+    dialog shouldn't also confirm it. Dismisses True on confirm, False on cancel.
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "Download", priority=True),
+        Binding("n", "cancel", "Cancel", priority=True),
+        Binding("escape", "cancel", "Cancel", priority=True),
+    ]
+
+    def __init__(self, vod: dict, streamer: str) -> None:
+        super().__init__()
+        self.vod = vod
+        self.streamer = streamer
+
+    def compose(self) -> ComposeResult:
+        v = self.vod
+        date = (v["created_at"] or "")[:10] or "unknown date"
+        dur = fetcher._format_duration(v["duration_seconds"])
+        with Vertical(id="confirmbox"):
+            yield Static(
+                "[b]Download chat for this VOD?[/b]\n\n"
+                f"{v['title'] or '(no title)'}\n"
+                f"[dim]{self.streamer} · {date} · {dur}[/dim]\n\n"
+                "[dim]Runs in the background — keep browsing.\n"
+                "y download · esc/n cancel[/dim]",
+                id="confirmtext",
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class WatchedEditScreen(ModalScreen[bool]):
@@ -671,7 +683,13 @@ class VodchatApp(App):
     #panes { height: 1fr; }
     #moments { width: 2fr; border: round $primary; }
     #emotes { width: 1fr; border: round $primary; }
-    #placeholder { height: 1fr; padding: 2; }
+
+    ConfirmDownloadScreen { align: center middle; }
+    #confirmbox {
+        width: 60; height: auto; padding: 1 2;
+        background: $surface; border: round $accent;
+    }
+    #confirmtext { height: auto; }
 
     WatchedEditScreen { align: center middle; }
     #editbox {

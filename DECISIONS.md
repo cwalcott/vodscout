@@ -15,6 +15,28 @@ Format:
 
 ---
 
+## 2026-06-23 — TUI: Enter on an undownloaded VOD offers to download it
+
+- Selecting an undownloaded VOD on the list no longer opens an empty "Not
+  downloaded yet" window. Instead it pops a `ConfirmDownloadScreen` (modal); a
+  confirm kicks off the same background download as `d`. There's nothing to show
+  for a VOD whose chat isn't on disk, so the placeholder window was a dead end —
+  offering the download is the only useful thing to do there.
+- Confirm requires an explicit `y`; `n`/`esc` cancel. Enter is deliberately
+  **not** bound on the dialog, so the same Enter that opened it can't immediately
+  confirm a download (chosen over Enter-confirms, to avoid an accidental
+  double-tap starting a fetch).
+- Pre-checks before showing the dialog mirror `start_download`: a VOD already
+  downloading just notifies; `--offline` notifies and skips the dialog (can't
+  download offline anyway).
+- Supersedes parts of the 2026-06-22 entry below: an undownloaded VOD no longer
+  opens a window, so VodScreen is now only ever built for downloaded VODs.
+  Removed the now-unreachable code — the placeholder branch, the VOD-window `d`
+  download action + its `_list_downloading` helper, the `not downloaded` guards
+  in the VodScreen actions, and the `switch_screen` in-place rebuild on
+  completion (nothing to rebuild now). `d` still downloads the highlighted row
+  from the list.
+
 ## 2026-06-22 — TUI download: grab a VOD's chat from inside the TUI
 
 - Closed the "downloading is a later slice" placeholder. `d` downloads a VOD's

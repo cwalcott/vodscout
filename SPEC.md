@@ -215,15 +215,16 @@ and the **selected VOD**. Flow: resolve a streamer (arg → `default_streamer`
 config key → prompt) → arrow through the VOD **list** (on open: your downloads
 plus recent VODs cached from the last refresh, so even not-yet-downloaded ones
 show with no network call; `r` refreshes from Twitch and re-caches; `d`
-downloads the highlighted VOD's chat) → press Enter to drill into a full-screen
-VOD **window** showing top moments (left) and
-emotes (right) side by side. In the window: `w` toggles All/Unwatched (drives the
+downloads the highlighted VOD's chat) → press Enter on a *downloaded* VOD to
+drill into a full-screen VOD **window** showing top moments (left) and
+emotes (right) side by side. Pressing Enter on an *undownloaded* VOD instead asks
+to confirm a download (there's nothing to show until its chat is on disk, so the
+window would be empty). In the window: `w` toggles All/Unwatched (drives the
 moment list), Enter opens a moment's timestamped link or drills into an emote's
-own spikes, `f` favorites an emote (pinned first), `d` downloads the chat if the
-VOD isn't downloaded yet (the window then fills in its moments/emotes), Esc
-returns to the list. Downloads run as a non-blocking background worker — you
-keep browsing while a chat downloads, the row shows a live count, and it flips
-to downloaded when it finishes.
+own spikes, `f` favorites an emote (pinned first), Esc returns to the list.
+Downloads run as a non-blocking background worker — you keep browsing while a
+chat downloads, the row shows a live count, and it flips to downloaded when it
+finishes.
 Watched tracking lives here too: coverage shows in the window, a VOD with no
 watched data auto-infers from your chat on first open, `e` opens an inline range
 editor, and `i` re-infers (see the watched section).
