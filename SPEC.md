@@ -223,8 +223,8 @@ window would be empty). In the window: `w` toggles All/Unwatched (drives the
 moment list), Enter opens a moment's timestamped link or drills into an emote's
 own spikes, `f` favorites an emote (pinned first), Esc returns to the list.
 Downloads run as a non-blocking background worker — you keep browsing while a
-chat downloads, the row shows a live count, and it flips to downloaded when it
-finishes.
+chat downloads, the row shows a live progress bar + percent (how far the fetched
+chat has reached through the VOD), and it flips to downloaded when it finishes.
 Watched tracking lives here too: coverage shows in the window, a VOD with no
 watched data auto-infers from your chat on first open, `e` opens an inline range
 editor, and `i` re-infers (see the watched section).

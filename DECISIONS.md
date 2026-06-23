@@ -15,6 +15,19 @@ Format:
 
 ---
 
+## 2026-06-23 — TUI: download progress is a percent bar, not a message count
+
+- The in-flight download indicator showed `↓ N msgs` / `↓ connecting…` in the
+  watched/coverage cell. That string is wider than the column (auto-sized to the
+  ~10-char coverage bar), so the DataTable truncated it — the count was cut off
+  mid-word. Switched to a percent: the `on_progress` hook already reports
+  `(completed_seconds, vod_duration)`, so the cell now renders the *same* `▓░`
+  bar + percent as watched coverage (via `_coverage_bar(done, total)`), growing
+  as the fetched chat reaches through the VOD. Same width as the coverage bar →
+  fits the column; the `⏳` marker (vs. `⬇`) is what flags it as a live download.
+- `_downloading` now maps `vod_id -> (completed_seconds, total_seconds)` instead
+  of a message count, so a table rebuild (refresh) re-renders the right percent.
+
 ## 2026-06-23 — TUI: Enter on an undownloaded VOD offers to download it
 
 - Selecting an undownloaded VOD on the list no longer opens an empty "Not

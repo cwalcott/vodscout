@@ -81,10 +81,11 @@ class VodListScreen(Screen):
         table = self.query_one("#vodlist", DataTable)
         table.add_columns("date", "length", "title", "watched", "")
         self._rows: dict[str, dict] = {}
-        # vod_id -> message count for in-flight background downloads. Workers are
-        # owned by this screen (it's the always-mounted base), so they keep
-        # running while the user is off in a VOD window.
-        self._downloading: dict[str, int] = {}
+        # vod_id -> (completed_seconds, total_seconds) progress for in-flight
+        # background downloads. Workers are owned by this screen (it's the
+        # always-mounted base), so they keep running while the user is off in a
+        # VOD window.
+        self._downloading: dict[str, tuple[int, int | None]] = {}
         # vod_id -> cancel flag, set on quit so a download aborts promptly (a
         # thread worker can't be force-killed, so it has to opt out itself).
         self._cancels: dict[str, threading.Event] = {}
@@ -117,8 +118,8 @@ class VodListScreen(Screen):
 
         # Re-apply the live indicator for any download still running across a
         # rebuild (a refresh rebuilds the table, but the worker keeps going).
-        for vod_id, count in self._downloading.items():
-            self._set_row_status(vod_id, count)
+        for vod_id, (done, total) in self._downloading.items():
+            self._set_row_status(vod_id, done, total)
 
         if note:
             self.notify(note, severity="warning")
@@ -194,9 +195,9 @@ class VodListScreen(Screen):
             self.notify(f"{vod_id} is already downloading.")
             return
 
-        self._downloading[vod_id] = 0
+        self._downloading[vod_id] = (0, None)
         self._cancels[vod_id] = threading.Event()
-        self._set_row_status(vod_id, 0)
+        self._set_row_status(vod_id, 0, None)
         self.run_worker(
             partial(self._do_download, vod_id),
             name=vod_id,
@@ -207,19 +208,20 @@ class VodListScreen(Screen):
         self.notify(f"Downloading {vod_id} in the background…")
 
     def _do_download(self, vod_id: str) -> None:
-        """Worker body (runs off the UI thread). Reports message counts back via
-        the throttled hook; result is handled in on_worker_state_changed."""
+        """Worker body (runs off the UI thread). Reports progress (content offset
+        vs. VOD duration) back via the throttled hook; result is handled in
+        on_worker_state_changed."""
         last = 0.0
-        count = 0
         cancel = self._cancels.get(vod_id)
 
         def on_progress(done: int, total: int | None) -> None:
-            nonlocal last, count
-            count += 1
+            nonlocal last
             now = time.monotonic()
             if now - last >= 0.2:  # throttle cross-thread UI hops to ~5/s
                 last = now
-                self.app.call_from_thread(self._on_download_progress, vod_id, count)
+                self.app.call_from_thread(
+                    self._on_download_progress, vod_id, done, total
+                )
 
         fetcher.fetch_by_url(
             vod_id,
@@ -240,21 +242,23 @@ class VodListScreen(Screen):
         # screen) — the reliable spot to release any in-flight downloads.
         self.cancel_all_downloads()
 
-    def _on_download_progress(self, vod_id: str, count: int) -> None:
+    def _on_download_progress(self, vod_id: str, done: int, total: int | None) -> None:
         if vod_id in self._downloading:  # ignore a late tick after completion
-            self._downloading[vod_id] = count
-            self._set_row_status(vod_id, count)
+            self._downloading[vod_id] = (done, total)
+            self._set_row_status(vod_id, done, total)
 
-    def _set_row_status(self, vod_id: str, count: int) -> None:
-        """Show a live download indicator on a row: ⏳ marker + message count
-        (parked in the otherwise-unused coverage cell of an undownloaded VOD)."""
+    def _set_row_status(self, vod_id: str, done: int, total: int | None) -> None:
+        """Show live download progress on a row: a fill bar + percent (how far
+        the fetched chat has reached through the VOD) in the otherwise-unused
+        coverage cell, plus a ⏳ marker. Reuses the watched coverage bar's
+        format, so it fits the column and reads the same — the ⏳ (vs. ⬇) is what
+        marks the row as an in-progress download rather than watched coverage."""
         table = self.query_one("#vodlist", DataTable)
         try:
             row = table.get_row_index(vod_id)
         except KeyError:
             return
-        status = f"↓ {count:,} msgs" if count else "↓ connecting…"
-        table.update_cell_at(Coordinate(row, 3), status)
+        table.update_cell_at(Coordinate(row, 3), _coverage_bar(done, total or 0))
         table.update_cell_at(Coordinate(row, 4), "⏳")
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
