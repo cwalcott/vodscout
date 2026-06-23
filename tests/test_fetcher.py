@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from vodchat import fetcher
 from vodchat.config import Config
 from vodchat.fetcher import (
     _scan_third_party,
@@ -159,6 +160,92 @@ def test_remove_cached_meta(tmp_path):
     remove_cached_meta(streamer_dir, "222")
     assert not meta_path.exists()
     remove_cached_meta(streamer_dir, "222")  # idempotent — no error when missing
+
+
+def test_fetch_by_url_on_progress_drives_hook_no_rich(tmp_path, monkeypatch):
+    config = Config(chat_dir=tmp_path)
+    monkeypatch.setattr(
+        fetcher,
+        "_video_metadata",
+        lambda vid: {
+            "title": "T",
+            "lengthSeconds": 100,
+            "publishedAt": "2026-06-22T00:00:00Z",
+            "owner": {"login": "shroud", "id": "42"},
+        },
+    )
+    monkeypatch.setattr(fetcher, "_third_party_emotes", lambda uid, sc=None: set())
+    msgs = [
+        {"time": 10, "user": "a", "msg": "hi"},
+        {"time": 90, "user": "b", "msg": "yo"},
+    ]
+    monkeypatch.setattr(fetcher, "_iter_messages", lambda session, vid, tp: iter(msgs))
+
+    seen: list[tuple[int, int | None]] = []
+    out = fetcher.fetch_by_url(
+        "123", config, on_progress=lambda d, t: seen.append((d, t))
+    )
+
+    assert out == tmp_path / "shroud" / "123.txt"
+    assert out.read_text().splitlines() == [
+        json.dumps(m, ensure_ascii=False) for m in msgs
+    ]
+    # Hook called once per message with (completed_seconds, total_seconds).
+    assert seen == [(10, 100), (90, 100)]
+    assert (tmp_path / "shroud" / "123.meta.json").exists()
+
+
+def test_fetch_by_url_cancel_aborts_and_cleans_tmp(tmp_path, monkeypatch):
+    config = Config(chat_dir=tmp_path)
+    monkeypatch.setattr(
+        fetcher,
+        "_video_metadata",
+        lambda vid: {
+            "title": "T",
+            "lengthSeconds": 100,
+            "publishedAt": "",
+            "owner": {"login": "shroud", "id": "42"},
+        },
+    )
+    monkeypatch.setattr(fetcher, "_third_party_emotes", lambda uid, sc=None: set())
+    msgs = [{"time": t, "user": "a", "msg": "hi"} for t in (10, 20, 30, 40)]
+    monkeypatch.setattr(fetcher, "_iter_messages", lambda session, vid, tp: iter(msgs))
+
+    n = {"calls": 0}
+
+    def should_cancel():
+        n["calls"] += 1
+        return n["calls"] > 3  # let a couple messages write, then cancel
+
+    with pytest.raises(fetcher.DownloadCancelled):
+        fetcher.fetch_by_url("123", config, should_cancel=should_cancel)
+
+    sdir = tmp_path / "shroud"
+    assert not (sdir / "123.txt").exists()  # no partial log committed
+    assert not (sdir / "123.tmp").exists()  # temp file cleaned up
+    assert not (sdir / "123.meta.json").exists()  # meta only written on success
+
+
+def test_fetch_by_url_no_messages_writes_nothing(tmp_path, monkeypatch):
+    config = Config(chat_dir=tmp_path)
+    monkeypatch.setattr(
+        fetcher,
+        "_video_metadata",
+        lambda vid: {
+            "title": "T",
+            "lengthSeconds": 100,
+            "publishedAt": "",
+            "owner": {"login": "shroud", "id": "42"},
+        },
+    )
+    monkeypatch.setattr(fetcher, "_third_party_emotes", lambda uid, sc=None: set())
+    monkeypatch.setattr(fetcher, "_iter_messages", lambda session, vid, tp: iter([]))
+
+    with pytest.raises(ValueError, match="No chat messages"):
+        fetcher.fetch_by_url("123", config, on_progress=lambda d, t: None)
+    # The tmp file is cleaned up and no log is left behind.
+    assert not (tmp_path / "shroud" / "123.txt").exists()
+    assert not (tmp_path / "shroud" / "123.tmp").exists()
 
 
 def test_downloaded_ids(tmp_path):

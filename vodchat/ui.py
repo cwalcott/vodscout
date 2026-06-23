@@ -4,24 +4,33 @@ This is a second consumer of fetcher/watched/analyzer (alongside cli.py). The
 three legs never import this module, and all the Textual interaction lives here,
 so the rest of the package carries no interactive-UI dependency.
 
-Flow: a VOD *list* screen (local downloads by default; `r` refreshes from Twitch);
-selecting a VOD pushes a full *VOD window* with top moments (left) and emotes
+Flow: a VOD *list* screen (downloads + recent VODs cached from the last refresh;
+`r` refreshes from Twitch, `d` downloads the highlighted VOD); selecting a VOD
+pushes a full *VOD window* with top moments (left) and emotes
 (right) side by side, a `w` All/Unwatched toggle that drives the moment list, and
 `f` to favorite
 an emote (pinned first). All wired to the real legs: list/moments/emotes, the
 `<streamer>/favorites.json` favorites sidecar, and watched tracking — auto-inferred
 from your chat on first open of a VOD, with `e` to edit the ranges inline and `i`
-to re-infer.
+to re-infer. An undownloaded VOD can be downloaded with `d` from the list or the
+window; the fetch runs as a background worker on the (always-mounted) list
+screen, so it doesn't block — you keep browsing while it downloads, the row
+shows a live message count, and it flips to downloaded when it finishes.
 """
 
+import threading
+import time
 import webbrowser
 from collections import Counter
+from functools import partial
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
+from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
 from textual.widgets import DataTable, Footer, Header, Static, TextArea
+from textual.worker import Worker, WorkerState
 
 from vodchat import actions, fetcher, vodlist
 from vodchat import analyzer as an
@@ -58,6 +67,7 @@ class VodListScreen(Screen):
 
     BINDINGS = [
         ("r", "refresh", "Refresh from Twitch"),
+        ("d", "download", "Download chat"),
         ("q", "app.quit", "Quit"),
     ]
 
@@ -70,6 +80,13 @@ class VodListScreen(Screen):
         table = self.query_one("#vodlist", DataTable)
         table.add_columns("date", "length", "title", "watched", "")
         self._rows: dict[str, dict] = {}
+        # vod_id -> message count for in-flight background downloads. Workers are
+        # owned by this screen (it's the always-mounted base), so they keep
+        # running while the user is off in a VOD window.
+        self._downloading: dict[str, int] = {}
+        # vod_id -> cancel flag, set on quit so a download aborts promptly (a
+        # thread worker can't be force-killed, so it has to opt out itself).
+        self._cancels: dict[str, threading.Event] = {}
         self._populate(offline=True)  # local-only on launch — no startup freeze
         table.focus()
 
@@ -97,6 +114,11 @@ class VodListScreen(Screen):
             dl = "⬇" if v["downloaded"] else " "
             table.add_row(date, dur, v["title"] or "(no title)", cov, dl, key=v["id"])
 
+        # Re-apply the live indicator for any download still running across a
+        # rebuild (a refresh rebuilds the table, but the worker keeps going).
+        for vod_id, count in self._downloading.items():
+            self._set_row_status(vod_id, count)
+
         if note:
             self.notify(note, severity="warning")
         elif not rows:
@@ -119,6 +141,163 @@ class VodListScreen(Screen):
             "Reloaded local VODs." if self.app.offline else "Refreshed from Twitch."
         )
 
+    def action_download(self) -> None:
+        """Start a background download for the highlighted row."""
+        table = self.query_one("#vodlist", DataTable)
+        if table.row_count == 0:
+            return
+        row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        if row_key.value:
+            self.start_download(row_key.value)
+
+    def start_download(self, vod_id: str) -> None:
+        """Kick off a non-blocking background fetch of one VOD's chat.
+
+        The worker is owned by this (always-mounted) screen, so it survives the
+        user drilling into a VOD window. Progress shows live in the row; the row
+        flips to downloaded on success. Both front-end entry points (the list and
+        the VOD window) funnel through here so there's one download path.
+        """
+        if self.app.offline:
+            self.notify(
+                "Offline — relaunch without --offline to download.",
+                severity="warning",
+            )
+            return
+        vod = self._rows.get(vod_id)
+        if not vod or vod["downloaded"]:
+            if vod:
+                self.notify("Already downloaded.")
+            return
+        if vod_id in self._downloading:
+            self.notify(f"{vod_id} is already downloading.")
+            return
+
+        self._downloading[vod_id] = 0
+        self._cancels[vod_id] = threading.Event()
+        self._set_row_status(vod_id, 0)
+        self.run_worker(
+            partial(self._do_download, vod_id),
+            name=vod_id,
+            group="downloads",
+            thread=True,
+            exit_on_error=False,  # a failed fetch must not tear down the app
+        )
+        self.notify(f"Downloading {vod_id} in the background…")
+
+    def _do_download(self, vod_id: str) -> None:
+        """Worker body (runs off the UI thread). Reports message counts back via
+        the throttled hook; result is handled in on_worker_state_changed."""
+        last = 0.0
+        count = 0
+        cancel = self._cancels.get(vod_id)
+
+        def on_progress(done: int, total: int | None) -> None:
+            nonlocal last, count
+            count += 1
+            now = time.monotonic()
+            if now - last >= 0.2:  # throttle cross-thread UI hops to ~5/s
+                last = now
+                self.app.call_from_thread(self._on_download_progress, vod_id, count)
+
+        fetcher.fetch_by_url(
+            vod_id,
+            self.app.config,
+            on_progress=on_progress,
+            should_cancel=cancel.is_set if cancel else None,
+        )
+
+    def cancel_all_downloads(self) -> None:
+        """Signal every in-flight download to abort. Called on app shutdown so a
+        quit mid-download doesn't hang the process waiting on the worker thread
+        (and the partial `.tmp` gets cleaned up by the fetch's own teardown)."""
+        for event in self._cancels.values():
+            event.set()
+
+    def on_unmount(self) -> None:
+        # This screen unmounts only when the app is quitting (it's the base
+        # screen) — the reliable spot to release any in-flight downloads.
+        self.cancel_all_downloads()
+
+    def _on_download_progress(self, vod_id: str, count: int) -> None:
+        if vod_id in self._downloading:  # ignore a late tick after completion
+            self._downloading[vod_id] = count
+            self._set_row_status(vod_id, count)
+
+    def _set_row_status(self, vod_id: str, count: int) -> None:
+        """Show a live download indicator on a row: ⏳ marker + message count
+        (parked in the otherwise-unused coverage cell of an undownloaded VOD)."""
+        table = self.query_one("#vodlist", DataTable)
+        try:
+            row = table.get_row_index(vod_id)
+        except KeyError:
+            return
+        status = f"↓ {count:,} msgs" if count else "↓ connecting…"
+        table.update_cell_at(Coordinate(row, 3), status)
+        table.update_cell_at(Coordinate(row, 4), "⏳")
+
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group != "downloads":
+            return
+        vod_id = event.worker.name
+        if event.state is WorkerState.SUCCESS:
+            self._finish_download(vod_id, ok=True)
+        elif event.state is WorkerState.ERROR:
+            err = event.worker.error
+            if isinstance(err, FileExistsError):
+                self._finish_download(vod_id, ok=True)  # already on disk
+            elif isinstance(err, fetcher.DownloadCancelled):
+                self._finish_download(vod_id, ok=False)  # quit/cancel — no toast
+            else:
+                self._finish_download(vod_id, ok=False, error=str(err))
+
+    def _finish_download(
+        self, vod_id: str, *, ok: bool, error: str | None = None
+    ) -> None:
+        self._downloading.pop(vod_id, None)
+        self._cancels.pop(vod_id, None)
+        if not ok:
+            self._reset_row(vod_id)
+            if error:  # a real failure; a bare cancel (quit) passes no error
+                self.notify(f"Download failed for {vod_id}: {error}", severity="error")
+            return
+        self.refresh_row(vod_id)
+        self.notify(f"Downloaded {vod_id}.")
+        # If the user is still sitting on this VOD's window, rebuild it in place
+        # so its moments/emotes appear; otherwise the row update is enough.
+        top = self.app.screen
+        if isinstance(top, VodScreen) and top.vod.get("id") == vod_id:
+            top.vod["downloaded"] = True
+            self.app.switch_screen(VodScreen(top.vod))
+
+    def refresh_row(self, vod_id: str) -> None:
+        """Flip one row to downloaded in place — no full re-populate, so the
+        cursor and any remote rows are preserved."""
+        vod = self._rows.get(vod_id)
+        if not vod:
+            return
+        vod["downloaded"] = True
+        vod["watched_seconds"] = _watched_seconds(vod_id, self.app.config)
+        self._set_row_cells(
+            vod_id, _coverage_bar(vod["watched_seconds"], vod["duration_seconds"]), "⬇"
+        )
+
+    def _reset_row(self, vod_id: str) -> None:
+        """Revert a row's transient download indicator back to its undownloaded
+        look (used when a download fails)."""
+        vod = self._rows.get(vod_id)
+        if vod:
+            self._set_row_cells(vod_id, _coverage_bar(0, vod["duration_seconds"]), " ")
+
+    def _set_row_cells(self, vod_id: str, coverage: str, marker: str) -> None:
+        table = self.query_one("#vodlist", DataTable)
+        try:
+            row = table.get_row_index(vod_id)
+        except KeyError:
+            return
+        table.update_cell_at(Coordinate(row, 3), coverage)
+        table.update_cell_at(Coordinate(row, 4), marker)
+
 
 class VodScreen(Screen):
     """One VOD: top moments (left) + emotes (right), with an All/Unwatched mode."""
@@ -130,6 +309,7 @@ class VodScreen(Screen):
         ("i", "infer", "Infer watched"),
         ("f", "favorite", "★ emote"),
         ("o", "overall", "Overall"),
+        ("d", "download", "Download chat"),
         ("q", "app.quit", "Quit"),
     ]
 
@@ -155,8 +335,8 @@ class VodScreen(Screen):
                 yield DataTable(id="emotes", cursor_type="row", zebra_stripes=True)
         else:
             yield Static(
-                "\n  [dim]Not downloaded yet. Downloading its chat is a later "
-                "slice — for now there's nothing to analyze.[/dim]",
+                "\n  [dim]Not downloaded yet — press [b]d[/b] to download its "
+                "chat, then its moments and emotes appear here.[/dim]",
                 id="placeholder",
             )
         yield Footer()
@@ -310,6 +490,30 @@ class VodScreen(Screen):
             self._load_moments()
             self._refresh_header()
             self._populate_moments()
+
+    def action_download(self) -> None:
+        """Kick off a background download for this VOD. Non-blocking: the worker
+        lives on the list screen, so you can Esc back and keep browsing. When it
+        finishes, the list rebuilds this window in place (see
+        VodListScreen._finish_download)."""
+        if self.vod["downloaded"]:
+            return
+        for screen in self.app.screen_stack:
+            if isinstance(screen, VodListScreen):
+                screen.start_download(self.vod["id"])
+                break
+        if self.vod["id"] in self._list_downloading:
+            self.query_one("#placeholder", Static).update(
+                "\n  [dim]Downloading its chat in the background… press [b]Esc[/b] "
+                "to keep browsing — this view fills in when it finishes.[/dim]"
+            )
+
+    @property
+    def _list_downloading(self) -> dict:
+        for screen in self.app.screen_stack:
+            if isinstance(screen, VodListScreen):
+                return screen._downloading
+        return {}
 
     def action_edit(self) -> None:
         """Open the inline watched-range editor; refresh on save."""

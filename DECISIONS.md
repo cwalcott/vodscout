@@ -15,6 +15,60 @@ Format:
 
 ---
 
+## 2026-06-22 — TUI download: grab a VOD's chat from inside the TUI
+
+- Closed the "downloading is a later slice" placeholder. `d` downloads a VOD's
+  chat from **both** the list (the highlighted row) and the VOD window (the open
+  VOD). Both funnel through one path (`VodListScreen.start_download`).
+- **Non-blocking background download (the whole point — corrected after a first
+  cut shipped it as a blocking modal).** First attempt put the fetch in a
+  `DownloadScreen` *modal* with a ProgressBar; it worked but a modal captures the
+  whole UI, so "in the background" was a lie — you couldn't do anything else
+  while it ran. Reworked: no modal. The worker is owned by `VodListScreen` (the
+  always-mounted base screen, so it survives the user drilling into a VOD
+  window), started via `run_worker(partial(self._do_download, vod_id),
+  name=vod_id, group="downloads", thread=True, exit_on_error=False)`. You keep
+  browsing — open other VODs, start other downloads — while it runs.
+- **Feedback without a modal:** the downloading row shows a live indicator in
+  place — a `⏳` marker + `↓ N msgs` count parked in the (otherwise-unused)
+  coverage cell of an undownloaded row; flips to `⬇` + coverage on success, or
+  reverts on failure. The `on_progress` hook feeds the count (throttled to ~5
+  cross-thread UI hops/s). A start/finish toast bookends it. Multiple concurrent
+  downloads are fine (one worker each, keyed by `vod_id` in `_downloading`).
+- **Completion handled in `on_worker_state_changed`** on the list screen (the
+  worker's node, so the message lands there even while the user is in a VOD
+  window): SUCCESS → `refresh_row` (flip to downloaded) + toast, and if the user
+  is *still* on that VOD's window, `switch_screen` rebuilds it with panes; ERROR
+  → revert the row + error toast. `exit_on_error=False` is essential — Textual's
+  default would route a failed fetch through `app._handle_exception` and tear
+  down the whole TUI; a stray `FileExistsError` is treated as success.
+- `fetcher.fetch_by_url` grew an optional `on_progress(done, total)` hook: given
+  → drive the caller's progress, render no Rich (a background worker can't let
+  Rich write to stdout under the live display); omitted → the CLI's Rich bar,
+  unchanged. Factored the streaming loop into `_stream_chat` so both paths share
+  it via an internal `report`. Both CLI sites (`_download_one`/`_download_many`)
+  call with no hook, so the CLI is untouched.
+- **Quit mid-download is cooperative-cancelled (fixed after testing it).** A
+  thread worker can't be force-killed, and Python's interpreter exit *joins*
+  the default-executor thread — so quitting while a download ran left the
+  terminal frozen (TUI gone, no feedback) until the *whole* chat finished, and a
+  hard-kill during that freeze orphaned the partial `.tmp`. Fix: `fetch_by_url`
+  takes a `should_cancel()` callback (raises `fetcher.DownloadCancelled`, checked
+  per page in `_stream_chat` and between the six third-party lookups); each
+  download has a `threading.Event`, and `VodListScreen.on_unmount`
+  (`cancel_all_downloads`) sets them on app teardown. Quit now aborts within a
+  poll/request cycle (~0.2s in a probe vs. ~the full download), and the fetch's
+  existing `except BaseException` cleans the `.tmp` — no orphan. Cancellation is
+  surfaced as a silent finish (no error toast). There's still no per-download
+  "cancel" *button* (parked); offline launch (`--offline`) refuses to download.
+- UI stays untested per convention, but validated headlessly with Textual's
+  `run_test` pilot before shipping — list + window paths, that it's genuinely
+  non-blocking (navigate to another VOD mid-download), the window-stay rebuild, a
+  failing fetch (app stays up, error toast, row reverts), and quit-mid-download
+  (`on_unmount` sets the cancel flag; a process-level probe confirmed the
+  interpreter-exit hang is gone). Fetcher hooks (`on_progress`, `should_cancel`)
+  are covered in `test_fetcher` (`_iter_messages` mocked, no network).
+
 ## 2026-06-22 — recent-VOD metadata cache (undownloaded VODs show at startup)
 
 - A Twitch refresh now caches a `.meta.json` sidecar for **every** recent VOD,

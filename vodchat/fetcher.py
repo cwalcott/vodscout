@@ -1,7 +1,9 @@
+import contextlib
 import json
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import requests
@@ -99,7 +101,22 @@ def _seventv_names(data) -> set[str]:
     return {e["name"] for e in emotes if e.get("name")}
 
 
-def _third_party_emotes(user_id: str) -> set[str]:
+class DownloadCancelled(Exception):
+    """Raised inside a download when its `should_cancel` callback turns true.
+
+    Lets a long fetch bail out promptly (and clean up its temp file) instead of
+    running to completion — e.g. when the TUI quits mid-download (a thread worker
+    can't be force-killed, so the work has to opt out cooperatively)."""
+
+
+def _check_cancel(should_cancel: "Callable[[], bool] | None") -> None:
+    if should_cancel is not None and should_cancel():
+        raise DownloadCancelled
+
+
+def _third_party_emotes(
+    user_id: str, should_cancel: "Callable[[], bool] | None" = None
+) -> set[str]:
     """Names of all BTTV/FFZ/7TV emotes available in the channel (+ globals).
 
     Each source is fetched independently and best-effort: a provider being
@@ -117,6 +134,7 @@ def _third_party_emotes(user_id: str) -> set[str]:
     ]
     names: set[str] = set()
     for url, extract in sources:
+        _check_cancel(should_cancel)  # bail between the six (slow) lookups
         try:
             names |= extract(_get_json(url))
         except Exception:
@@ -191,15 +209,81 @@ def _iter_messages(
         cursor = edges[-1]["cursor"]
 
 
-def fetch_by_url(url: str, config: Config) -> Path:
-    """Download chat for a VOD URL/ID. Returns path to the saved chat log."""
+def _stream_chat(
+    vod_id: str,
+    third_party: set[str],
+    tmp_path: Path,
+    duration: int | None,
+    on_progress: "Callable[[int, int | None], None] | None",
+    should_cancel: "Callable[[], bool] | None" = None,
+) -> int:
+    """Stream the VOD's chat to `tmp_path`, returning the message count.
+
+    Progress reporting branches on `on_progress`: when None (the CLI path),
+    render the Rich progress bar to the terminal as before; when given (e.g. the
+    TUI worker, which can't have Rich writing to stdout under the live display),
+    call it with `(completed_seconds, total_seconds)` and render no Rich output.
+    """
+    with contextlib.ExitStack() as stack:
+        if on_progress is None:
+            progress = stack.enter_context(
+                Progress(
+                    "[progress.description]{task.description}",
+                    BarColumn(),
+                    TaskProgressColumn(),
+                    TimeRemainingColumn(),
+                )
+            )
+            task = progress.add_task(f"[cyan]Fetching {vod_id}", total=duration)
+
+            def report(done: int) -> None:
+                if duration:
+                    progress.update(task, completed=done)
+        else:
+
+            def report(done: int) -> None:
+                on_progress(done, duration)
+
+        session = stack.enter_context(requests.Session())
+        session.headers["Client-ID"] = _CHAT_CLIENT_ID
+        f = stack.enter_context(tmp_path.open("w"))
+        count = 0
+        for msg in _iter_messages(session, vod_id, third_party):
+            _check_cancel(
+                should_cancel
+            )  # checked each page; aborts before the next fetch
+            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+            count += 1
+            report(msg["time"])
+    return count
+
+
+def fetch_by_url(
+    url: str,
+    config: Config,
+    *,
+    on_progress: "Callable[[int, int | None], None] | None" = None,
+    should_cancel: "Callable[[], bool] | None" = None,
+) -> Path:
+    """Download chat for a VOD URL/ID. Returns path to the saved chat log.
+
+    `on_progress(completed_seconds, total_seconds)` is an optional hook for a
+    non-terminal front end (the TUI) to drive its own progress widget; when
+    omitted, a Rich progress bar is rendered to the terminal (the CLI path).
+
+    `should_cancel()` is an optional callback polled during the fetch; when it
+    turns true the download raises `DownloadCancelled`, and the partial temp
+    file is cleaned up by the same path as any other failure. Used by the TUI so
+    quitting mid-download aborts promptly instead of hanging on the worker.
+    """
     vod_id = _vod_id_from_url(url)
     meta = _video_metadata(vod_id)
     streamer = meta["owner"]["login"]
     duration = meta.get("lengthSeconds") or None
 
     owner_id = meta["owner"].get("id")
-    third_party = _third_party_emotes(owner_id) if owner_id else set()
+    _check_cancel(should_cancel)
+    third_party = _third_party_emotes(owner_id, should_cancel) if owner_id else set()
 
     out_dir = config.chat_dir / streamer
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -209,27 +293,12 @@ def fetch_by_url(url: str, config: Config) -> Path:
         raise FileExistsError(f"Chat log already exists: {out_path}")
 
     tmp_path = out_path.with_suffix(".tmp")
-    count = 0
     try:
-        with Progress(
-            "[progress.description]{task.description}",
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeRemainingColumn(),
-        ) as progress:
-            task = progress.add_task(f"[cyan]Fetching {vod_id}", total=duration)
-            with requests.Session() as session:
-                session.headers["Client-ID"] = _CHAT_CLIENT_ID
-                with tmp_path.open("w") as f:
-                    for msg in _iter_messages(session, vod_id, third_party):
-                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-                        count += 1
-                        if duration:
-                            progress.update(task, completed=msg["time"])
-
+        count = _stream_chat(
+            vod_id, third_party, tmp_path, duration, on_progress, should_cancel
+        )
         if count == 0:
             raise ValueError(f"No chat messages found for VOD {vod_id!r}.")
-
         os.replace(tmp_path, out_path)
     except BaseException:
         tmp_path.unlink(missing_ok=True)
