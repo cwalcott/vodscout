@@ -17,8 +17,11 @@ asks to confirm a download (or `d` grabs the highlighted row without the prompt)
 The fetch runs as a background worker on the (always-mounted) list screen, so it
 doesn't block — you keep browsing while it downloads, the row shows a spinner and
 a live progress bar (how far the fetched chat has reached through the VOD), and
-it flips to downloaded when it finishes. The watched column is blank for
-undownloaded VODs (coverage only means something once the chat is on disk).
+it flips to downloaded when it finishes. The same worker also infers watched
+ranges from the freshly-downloaded chat (off the UI thread), so the row lands on
+real coverage instead of flashing 0% until the VOD is opened. The watched column
+is blank for undownloaded VODs (coverage only means something once the chat is on
+disk).
 Quitting aborts any in-flight download, so `q` confirms first (`ConfirmQuitScreen`)
 when something is still downloading — otherwise it exits straight away.
 """
@@ -66,6 +69,37 @@ def _watched_seconds(vod_id: str, config: "cfg.Config") -> int:
     except (FileNotFoundError, ValueError):
         return 0
     return sum(r.end_seconds - r.start_seconds for r in ranges)
+
+
+def _infer_watched(vod_id: str, config: "cfg.Config") -> int:
+    """Infer watched ranges from the user's own chat and persist them; return the
+    number of ranges saved (0 if it did nothing).
+
+    No-op — returns 0 — when there's no configured twitch_username, when a
+    .watched.json already exists (never infer over existing data), or when the
+    user never chatted in this VOD (an empty result leaves no file, so no false
+    'has watched data' flag). Pure disk/compute with no Textual dependency, so
+    it's safe to call off the UI thread — the background download does, right
+    after the chat lands, so the list shows real coverage instead of a 0% that
+    only fills in once the VOD is opened.
+    """
+    if not config.twitch_username:
+        return 0
+    try:
+        if wt._watched_path(vod_id, config.chat_dir).exists():
+            return 0
+        suggested = wt.infer_from_chat(
+            vod_id,
+            config.twitch_username,
+            config.chat_dir,
+            config.gap_threshold_seconds,
+        )
+    except (FileNotFoundError, ValueError):
+        return 0
+    if not suggested:
+        return 0
+    actions.add_ranges(vod_id, config, suggested)
+    return len(suggested)
 
 
 class VodListScreen(Screen):
@@ -233,9 +267,11 @@ class VodListScreen(Screen):
         )
         self.notify(f"Downloading {vod_id} in the background…")
 
-    def _do_download(self, vod_id: str) -> None:
+    def _do_download(self, vod_id: str) -> int:
         """Worker body (runs off the UI thread). Reports progress (content offset
-        vs. VOD duration) back via the throttled hook; result is handled in
+        vs. VOD duration) back via the throttled hook, fetches the chat, then
+        infers watched ranges from it up front. Returns the inferred-range count
+        (surfaced in the completion toast); the SUCCESS/ERROR result is handled in
         on_worker_state_changed."""
         last = 0.0
         cancel = self._cancels.get(vod_id)
@@ -255,6 +291,13 @@ class VodListScreen(Screen):
             on_progress=on_progress,
             should_cancel=cancel.is_set if cancel else None,
         )
+        # Chat is on disk now. Infer watched ranges here, on the worker thread,
+        # so the row flips straight to real coverage when it completes — no 0%
+        # flash that only fills in once the VOD is opened. Skip if we're being
+        # torn down (quit signals cancel after a fetch may have already landed).
+        if cancel and cancel.is_set():
+            return 0
+        return _infer_watched(vod_id, self.app.config)
 
     def cancel_all_downloads(self) -> None:
         """Signal every in-flight download to abort. Called on app shutdown so a
@@ -306,7 +349,7 @@ class VodListScreen(Screen):
             return
         vod_id = event.worker.name
         if event.state is WorkerState.SUCCESS:
-            self._finish_download(vod_id, ok=True)
+            self._finish_download(vod_id, ok=True, inferred=event.worker.result or 0)
         elif event.state is WorkerState.ERROR:
             err = event.worker.error
             if isinstance(err, FileExistsError):
@@ -317,7 +360,7 @@ class VodListScreen(Screen):
                 self._finish_download(vod_id, ok=False, error=str(err))
 
     def _finish_download(
-        self, vod_id: str, *, ok: bool, error: str | None = None
+        self, vod_id: str, *, ok: bool, error: str | None = None, inferred: int = 0
     ) -> None:
         self._downloading.pop(vod_id, None)
         self._cancels.pop(vod_id, None)
@@ -329,7 +372,10 @@ class VodListScreen(Screen):
                 self.notify(f"Download failed for {vod_id}: {error}", severity="error")
             return
         self.refresh_row(vod_id)
-        self.notify(f"Downloaded {vod_id}.")
+        msg = f"Downloaded {vod_id}."
+        if inferred:  # watched ranges inferred from your chat as part of the fetch
+            msg += f" Inferred {inferred} watched range(s) from your chat."
+        self.notify(msg)
 
     def refresh_row(self, vod_id: str) -> None:
         """Flip one row to downloaded in place — no full re-populate, so the
@@ -439,29 +485,16 @@ class VodScreen(Screen):
 
     def _auto_infer(self) -> None:
         """On first open of a VOD with no watched file, infer watched ranges from
-        the user's own chat and persist them — but only if non-empty, so an empty
-        result leaves no file (and no false 'has watched data' flag). No-op without
-        a configured twitch_username."""
-        config = self.app.config
-        if not config.twitch_username:
-            return
-        try:
-            if wt._watched_path(self.vod["id"], config.chat_dir).exists():
-                return  # already has watched data — never infer over it
-            suggested = wt.infer_from_chat(
-                self.vod["id"],
-                config.twitch_username,
-                config.chat_dir,
-                config.gap_threshold_seconds,
-            )
-        except (FileNotFoundError, ValueError):
-            return
-        if suggested:
-            actions.add_ranges(self.vod["id"], config, suggested)
+        the user's own chat and reflect them.
+
+        Usually a no-op now — TUI downloads infer up front (see _infer_watched),
+        so the file already exists by the time you open the VOD — but this still
+        covers VODs fetched outside the TUI, or before a twitch_username was set.
+        """
+        count = _infer_watched(self.vod["id"], self.app.config)
+        if count:
             self._recompute_coverage()
-            self.notify(
-                f"Auto-inferred {len(suggested)} watched range(s) from your chat."
-            )
+            self.notify(f"Auto-inferred {count} watched range(s) from your chat.")
 
     # --- rendering -------------------------------------------------------
 

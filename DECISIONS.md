@@ -15,6 +15,25 @@ Format:
 
 ---
 
+## 2026-06-23 — TUI: infer watched ranges at download time, not just on open
+
+- A freshly-downloaded VOD used to show `0%` watched in the list until you
+  opened it, at which point `VodScreen._auto_infer` ran and the number jumped to
+  the chat-inferred coverage. Confusing (looked like opening a VOD "marked" it
+  watched). Now the inference runs as the last step of the background download
+  worker, so the row lands on real coverage the moment it flips to downloaded.
+- Runs on the *worker* thread (right after `fetch_by_url`), not the UI thread, so
+  parsing the just-downloaded chat doesn't stutter the list while you're still
+  browsing. The inferred-range count rides back as the worker's return value
+  (`worker.result`) and is appended to the completion toast.
+- Extracted the infer-and-persist logic into a module-level `_infer_watched(vod_id,
+  config) -> int` (count saved) shared by the download hook and the on-open
+  `_auto_infer`. Same guards as before: no-op without `twitch_username`, never
+  infers over an existing `.watched.json`, and an empty result writes no file.
+- Kept `_auto_infer` on VOD open as a fallback — now usually a no-op since the
+  file already exists — so VODs fetched outside the TUI (or before a username was
+  configured) still get inferred when first opened.
+
 ## 2026-06-23 — TUI: confirm quit while a download is in flight
 
 - Quitting aborts in-flight background downloads (the workers are cancelled on
