@@ -15,8 +15,10 @@ from your chat on first open of a VOD, with `e` to edit the ranges inline and `i
 to re-infer. An undownloaded VOD has no window to open, so selecting one instead
 asks to confirm a download (or `d` grabs the highlighted row without the prompt).
 The fetch runs as a background worker on the (always-mounted) list screen, so it
-doesn't block — you keep browsing while it downloads, the row shows a live
-message count, and it flips to downloaded when it finishes.
+doesn't block — you keep browsing while it downloads, the row shows a spinner and
+a live progress bar (how far the fetched chat has reached through the VOD), and
+it flips to downloaded when it finishes. The watched column is blank for
+undownloaded VODs (coverage only means something once the chat is on disk).
 """
 
 import threading
@@ -50,6 +52,11 @@ def _coverage_bar(watched_seconds: int, duration_seconds: int, width: int = 5) -
     return f"{bar} {round(frac * 100):>3}%"
 
 
+# Frames for the in-row "downloading" spinner — gives immediate, continuous
+# motion the instant a download starts, before the percent has anything to show.
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
 def _watched_seconds(vod_id: str, config: "cfg.Config") -> int:
     """Total watched time for a VOD, for the coverage bar. 0 if none/unreadable."""
     try:
@@ -79,7 +86,12 @@ class VodListScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#vodlist", DataTable)
-        table.add_columns("date", "length", "title", "watched", "")
+        table.add_columns("date", "length", "title")
+        # Fixed widths: the watched cell is blank until a VOD is downloaded, so
+        # the column can't auto-size to the bar — pin it wide enough that the
+        # download/coverage bar always fits (no truncation).
+        table.add_column("watched", width=11)
+        table.add_column("", width=2)  # marker: ⬇ downloaded · spinner downloading
         self._rows: dict[str, dict] = {}
         # vod_id -> (completed_seconds, total_seconds) progress for in-flight
         # background downloads. Workers are owned by this screen (it's the
@@ -89,6 +101,11 @@ class VodListScreen(Screen):
         # vod_id -> cancel flag, set on quit so a download aborts promptly (a
         # thread worker can't be force-killed, so it has to opt out itself).
         self._cancels: dict[str, threading.Event] = {}
+        # Spinner animation for in-flight downloads: a paused interval that runs
+        # only while something is downloading (resumed in start_download, paused
+        # again when the last one finishes).
+        self._spin = 0
+        self._spinner_timer = self.set_interval(0.1, self._tick_spinner, pause=True)
         self._populate(offline=True)  # local-only on launch — no startup freeze
         table.focus()
 
@@ -112,7 +129,13 @@ class VodListScreen(Screen):
             self._rows[v["id"]] = v
             date = (v["created_at"] or "")[:10] or "??????????"
             dur = fetcher._format_duration(v["duration_seconds"])
-            cov = _coverage_bar(v["watched_seconds"], v["duration_seconds"])
+            # Watched coverage only means something once the chat is on disk; an
+            # undownloaded VOD shows nothing here (not a misleading "0% watched").
+            cov = (
+                _coverage_bar(v["watched_seconds"], v["duration_seconds"])
+                if v["downloaded"]
+                else ""
+            )
             dl = "⬇" if v["downloaded"] else " "
             table.add_row(date, dur, v["title"] or "(no title)", cov, dl, key=v["id"])
 
@@ -197,6 +220,7 @@ class VodListScreen(Screen):
 
         self._downloading[vod_id] = (0, None)
         self._cancels[vod_id] = threading.Event()
+        self._spinner_timer.resume()  # animate immediately, before any progress
         self._set_row_status(vod_id, 0, None)
         self.run_worker(
             partial(self._do_download, vod_id),
@@ -250,16 +274,30 @@ class VodListScreen(Screen):
     def _set_row_status(self, vod_id: str, done: int, total: int | None) -> None:
         """Show live download progress on a row: a fill bar + percent (how far
         the fetched chat has reached through the VOD) in the otherwise-unused
-        coverage cell, plus a ⏳ marker. Reuses the watched coverage bar's
-        format, so it fits the column and reads the same — the ⏳ (vs. ⬇) is what
-        marks the row as an in-progress download rather than watched coverage."""
+        coverage cell, plus a spinning marker. Reuses the watched coverage bar's
+        format, so it reads the same — the spinner (vs. ⬇) is what marks the row
+        as an in-progress download rather than watched coverage, and it animates
+        even while the percent sits at 0% during the initial connect."""
         table = self.query_one("#vodlist", DataTable)
         try:
             row = table.get_row_index(vod_id)
         except KeyError:
             return
         table.update_cell_at(Coordinate(row, 3), _coverage_bar(done, total or 0))
-        table.update_cell_at(Coordinate(row, 4), "⏳")
+        table.update_cell_at(Coordinate(row, 4), _SPINNER[self._spin])
+
+    def _tick_spinner(self) -> None:
+        """Advance the download spinner one frame and repaint every in-flight
+        row's marker. Runs only while something is downloading."""
+        self._spin = (self._spin + 1) % len(_SPINNER)
+        frame = _SPINNER[self._spin]
+        table = self.query_one("#vodlist", DataTable)
+        for vod_id in self._downloading:
+            try:
+                row = table.get_row_index(vod_id)
+            except KeyError:
+                continue
+            table.update_cell_at(Coordinate(row, 4), frame)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.group != "downloads":
@@ -281,6 +319,8 @@ class VodListScreen(Screen):
     ) -> None:
         self._downloading.pop(vod_id, None)
         self._cancels.pop(vod_id, None)
+        if not self._downloading:
+            self._spinner_timer.pause()  # nothing left to animate
         if not ok:
             self._reset_row(vod_id)
             if error:  # a real failure; a bare cancel (quit) passes no error
@@ -303,10 +343,9 @@ class VodListScreen(Screen):
 
     def _reset_row(self, vod_id: str) -> None:
         """Revert a row's transient download indicator back to its undownloaded
-        look (used when a download fails)."""
-        vod = self._rows.get(vod_id)
-        if vod:
-            self._set_row_cells(vod_id, _coverage_bar(0, vod["duration_seconds"]), " ")
+        look — blank watched cell, no marker (used when a download fails)."""
+        if vod_id in self._rows:
+            self._set_row_cells(vod_id, "", " ")
 
     def _set_row_cells(self, vod_id: str, coverage: str, marker: str) -> None:
         table = self.query_one("#vodlist", DataTable)

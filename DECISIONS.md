@@ -15,6 +15,22 @@ Format:
 
 ---
 
+## 2026-06-23 — TUI: blank watched cell for undownloaded VODs + download spinner
+
+- Two follow-ups to the percent-bar change below. (1) The watched column showed
+  `░░░░░ 0%` for *undownloaded* VODs — a misleading "0% watched" on something you
+  can't have watched yet (watched data only exists once the chat is downloaded).
+  It's now blank for undownloaded rows; the bar appears only when downloading
+  (progress) or downloaded (coverage). Downloaded-but-unwatched still shows `0%`,
+  which is real. (2) At the start of a download the percent sits at 0% during the
+  network connect, so you couldn't tell anything was happening. Added a braille
+  spinner in the marker column that starts the instant you trigger a download and
+  animates continuously until it finishes (then → `⬇`). Driven by a `set_interval`
+  that's paused unless something is downloading.
+- The watched column is now a **fixed width** (`add_column(width=11)`). It has to
+  be: with undownloaded cells blank, the column would auto-size to nothing on an
+  all-undownloaded list, then truncate the bar the moment a download started.
+
 ## 2026-06-23 — TUI: download progress is a percent bar, not a message count
 
 - The in-flight download indicator showed `↓ N msgs` / `↓ connecting…` in the
