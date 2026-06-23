@@ -19,6 +19,8 @@ doesn't block — you keep browsing while it downloads, the row shows a spinner 
 a live progress bar (how far the fetched chat has reached through the VOD), and
 it flips to downloaded when it finishes. The watched column is blank for
 undownloaded VODs (coverage only means something once the chat is on disk).
+Quitting aborts any in-flight download, so `q` confirms first (`ConfirmQuitScreen`)
+when something is still downloading — otherwise it exits straight away.
 """
 
 import threading
@@ -652,6 +654,46 @@ class ConfirmDownloadScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ConfirmQuitScreen(ModalScreen[bool]):
+    """Confirm-before-quit dialog, shown only when a chat download is in flight.
+
+    Quitting aborts in-flight downloads (the workers are signalled to cancel on
+    shutdown and the partial `.tmp` is discarded), so an active download is worth
+    a deliberate `y`. `n`/`esc` stays in the app and keeps downloading. Like
+    ConfirmDownloadScreen, Enter is not bound. Dismisses True to quit.
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "Quit", priority=True),
+        Binding("n", "cancel", "Stay", priority=True),
+        Binding("escape", "cancel", "Stay", priority=True),
+    ]
+
+    def __init__(self, count: int) -> None:
+        super().__init__()
+        self.count = count
+
+    def compose(self) -> ComposeResult:
+        n = self.count
+        subject = "1 chat download is" if n == 1 else f"{n} chat downloads are"
+        them = "it" if n == 1 else "them"
+        logs = "log" if n == 1 else "logs"
+        with Vertical(id="confirmbox"):
+            yield Static(
+                "[b]Quit and stop downloading?[/b]\n\n"
+                f"{subject} still running — quitting\n"
+                f"cancels {them} and discards the partial {logs}.\n\n"
+                "[dim]y quit · esc/n keep downloading[/dim]",
+                id="confirmtext",
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
 class WatchedEditScreen(ModalScreen[bool]):
     """Inline editor for a VOD's watched ranges, one `H:MM:SS-H:MM:SS` per line.
 
@@ -727,7 +769,7 @@ class VodchatApp(App):
     #moments { width: 2fr; border: round $primary; }
     #emotes { width: 1fr; border: round $primary; }
 
-    ConfirmDownloadScreen { align: center middle; }
+    ConfirmDownloadScreen, ConfirmQuitScreen { align: center middle; }
     #confirmbox {
         width: 60; height: auto; padding: 1 2;
         background: $surface; border: round $accent;
@@ -755,6 +797,34 @@ class VodchatApp(App):
         self.title = "vodchat"
         self.sub_title = self.streamer
         self.push_screen(VodListScreen())
+
+    def _vodlist_screen(self) -> "VodListScreen | None":
+        """The always-mounted base list screen, which owns download state."""
+        for screen in self.screen_stack:
+            if isinstance(screen, VodListScreen):
+                return screen
+        return None
+
+    async def action_quit(self) -> None:
+        """Quit — but if any chat download is still running, confirm first, since
+        quitting aborts it (the worker is cancelled on shutdown and its partial
+        chat log discarded). Overriding the app's quit action covers every quit
+        entry point (q on the list and the VOD window both bind to app.quit)."""
+        base = self._vodlist_screen()
+        if (
+            base
+            and base._downloading
+            and not isinstance(self.screen, ConfirmQuitScreen)
+        ):
+            self.push_screen(
+                ConfirmQuitScreen(len(base._downloading)), self._after_quit_confirm
+            )
+            return
+        self.exit()
+
+    def _after_quit_confirm(self, confirm: bool | None) -> None:
+        if confirm:
+            self.exit()
 
 
 def run_shell(

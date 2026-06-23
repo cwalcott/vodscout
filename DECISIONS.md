@@ -15,6 +15,20 @@ Format:
 
 ---
 
+## 2026-06-23 — TUI: confirm quit while a download is in flight
+
+- Quitting aborts in-flight background downloads (the workers are cancelled on
+  shutdown and their partial `.tmp` discarded), so `q` now routes through a
+  confirm modal (`ConfirmQuitScreen`, `y` quit / `esc`·`n` keep downloading) —
+  but *only* when something is actually downloading; an idle `q` still exits
+  immediately. Wording is concise, mirroring `ConfirmDownloadScreen`.
+- Implemented by overriding `VodchatApp.action_quit` rather than re-binding `q`
+  on each screen: in Textual 8.2.7 every quit path funnels through the app's
+  `quit` action (ctrl+c doesn't even exit — it just notifies), and both the list
+  and VOD-window `q` bindings point at `app.quit`, so one override covers them
+  all. The download state it checks (`_downloading`) lives on the always-mounted
+  `VodListScreen`, found via `_vodlist_screen()` walking the screen stack.
+
 ## 2026-06-23 — TUI: blank watched cell for undownloaded VODs + download spinner
 
 - Two follow-ups to the percent-bar change below. (1) The watched column showed
