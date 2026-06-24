@@ -8,8 +8,9 @@ Flow: a VOD *list* screen (downloads + recent VODs cached from the last refresh;
 `r` refreshes from Twitch, `d` downloads the highlighted VOD); selecting a
 *downloaded* VOD pushes a full *VOD window* with top moments (left) and emotes
 (right) side by side, a `w` All/Unwatched toggle that drives the moment list, and
-`f` to favorite
-an emote (pinned first). All wired to the real legs: list/moments/emotes, the
+`f` to favorite the highlighted emote (pinned first) — or `/` to search-and-favorite
+via a type-to-filter picker over the VOD's emotes. All wired to the real legs:
+list/moments/emotes, the
 `<streamer>/favorites.json` favorites sidecar, and watched tracking — auto-inferred
 from your chat on first open of a VOD, with `e` to edit the ranges inline and `i`
 to re-infer. An undownloaded VOD has no window to open, so selecting one instead
@@ -32,12 +33,22 @@ import webbrowser
 from collections import Counter
 from functools import partial
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
-from textual.widgets import DataTable, Footer, Header, Static, TextArea
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    OptionList,
+    Static,
+    TextArea,
+)
+from textual.widgets.option_list import Option
 from textual.worker import Worker, WorkerState
 
 from vodchat import actions, fetcher, vodlist
@@ -100,6 +111,22 @@ def _infer_watched(vod_id: str, config: "cfg.Config") -> int:
         return 0
     actions.add_ranges(vod_id, config, suggested)
     return len(suggested)
+
+
+def _match_emotes(
+    items: list[tuple[str, int]], query: str
+) -> list[tuple[str, int]]:
+    """Filter (emote, count) pairs by a case-insensitive substring `query`,
+    preserving the input order (callers pass them most-used first).
+
+    An empty/whitespace query matches everything. Mirrors how the analyzer
+    resolves `--emote` (case-insensitive, partial), but keeps every match rather
+    than collapsing to the single most-used one — the picker shows the field.
+    """
+    q = query.strip().lower()
+    if not q:
+        return list(items)
+    return [(name, n) for name, n in items if q in name.lower()]
 
 
 class VodListScreen(Screen):
@@ -414,6 +441,7 @@ class VodScreen(Screen):
         ("e", "edit", "Edit watched"),
         ("i", "infer", "Infer watched"),
         ("f", "favorite", "★ emote"),
+        ("/", "favorite_search", "★ search"),
         ("o", "overall", "Overall"),
         ("q", "app.quit", "Quit"),
     ]
@@ -443,7 +471,7 @@ class VodScreen(Screen):
         self.query_one("#moments", DataTable).border_title = "Top moments"
         self.query_one(
             "#emotes", DataTable
-        ).border_title = "Emotes  (f: ★ · tab: focus)"
+        ).border_title = "Emotes  (f: ★ · /: search · tab: focus)"
         self.favorites = fav.load(self._streamer, self.app.config.chat_dir)
         self._auto_infer()
         self._refresh_header()
@@ -624,12 +652,38 @@ class VodScreen(Screen):
         name = row_key.value
         if name not in self._emote_counts:
             return  # the "(no emotes)" placeholder row
+        self._toggle_favorite(name)
+
+    def action_favorite_search(self) -> None:
+        """Open the search-to-favorite picker (`/`): type to filter this VOD's
+        emotes, Enter favorites the highlighted match — handy when the emote is
+        buried in a long pane. Works regardless of which pane has focus."""
+        if not self._emote_counts:
+            self.notify("No emotes in this VOD to favorite.")
+            return
+
+        def after(name: str | None) -> None:
+            if name:
+                self._toggle_favorite(name, announce=True)
+
+        self.app.push_screen(
+            FavoriteEmotePickerScreen(self._emote_counts, self.favorites), after
+        )
+
+    def _toggle_favorite(self, name: str, announce: bool = False) -> None:
+        """Add/remove `name` from this streamer's favorites, persist, repaint the
+        pane. `announce` notifies which way it flipped — the picker closes over the
+        pane, so unlike the inline `f` the result isn't visible without a word."""
         if name in self.favorites:
             self.favorites.discard(name)
+            verb = "Unfavorited"
         else:
             self.favorites.add(name)
+            verb = "Favorited"
         fav.save(self.favorites, self._streamer, self.app.config.chat_dir)
         self._populate_emotes()
+        if announce:
+            self.notify(f"{verb} {name}.")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if event.data_table.id == "moments":
@@ -645,6 +699,80 @@ class VodScreen(Screen):
                 self._load_moments()
                 self._refresh_header()
                 self._populate_moments()
+
+
+class FavoriteEmotePickerScreen(ModalScreen[str | None]):
+    """Search-to-favorite picker, opened with `/` from the VOD window.
+
+    Type to filter the VOD's emotes live (case-insensitive substring); ↑↓ move
+    the highlight, Enter favorites the highlighted emote, Esc cancels. Scoped to
+    emotes present in *this* VOD's chat — the tool keeps no offline catalogue of
+    every Twitch emote, and that's the same universe the pane already shows.
+    Already-favorited emotes carry a ★. Dismisses with the chosen emote name (the
+    caller toggles + persists it) or None on cancel.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+        Binding("down", "cursor_down", "Down", priority=True),
+        Binding("up", "cursor_up", "Up", priority=True),
+    ]
+
+    _NAME_WIDTH = 24  # column the count is padded out to; long emotes overflow it
+
+    def __init__(self, emote_counts: Counter, favorites: set[str]) -> None:
+        super().__init__()
+        self._items = emote_counts.most_common()
+        self.favorites = favorites
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="pickbox"):
+            yield Static(
+                "Favorite an emote — type to filter this VOD's emotes\n"
+                "[dim]↑↓ move · enter ★ favorite · esc cancel[/dim]",
+                id="pickhint",
+            )
+            yield Input(placeholder="filter emotes…", id="pickquery")
+            yield OptionList(id="pickoptions")
+
+    def on_mount(self) -> None:
+        self.query_one("#pickquery", Input).focus()
+        self._repopulate("")
+
+    def _repopulate(self, query: str) -> None:
+        options = self.query_one("#pickoptions", OptionList)
+        options.clear_options()
+        matches = _match_emotes(self._items, query)
+        if not matches:
+            options.add_option(Option(Text("(no match)", style="dim"), disabled=True))
+            return
+        width = min(max(len(name) for name, _ in matches), self._NAME_WIDTH)
+        for name, n in matches:
+            star = "★ " if name in self.favorites else "  "
+            label = Text.assemble(star, name.ljust(width), "  ", (str(n), "dim"))
+            options.add_option(Option(label, id=name))
+        options.highlighted = 0
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._repopulate(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        options = self.query_one("#pickoptions", OptionList)
+        if options.highlighted is None:
+            return
+        option = options.get_option_at_index(options.highlighted)
+        if option.id is None:
+            return  # the "(no match)" placeholder — keep the picker open
+        self.dismiss(option.id)
+
+    def action_cursor_down(self) -> None:
+        self.query_one("#pickoptions", OptionList).action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        self.query_one("#pickoptions", OptionList).action_cursor_up()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
 class ConfirmDownloadScreen(ModalScreen[bool]):
@@ -816,6 +944,15 @@ class VodchatApp(App):
     }
     #edithint { height: auto; padding-bottom: 1; }
     #editarea { height: 12; }
+
+    FavoriteEmotePickerScreen { align: center middle; }
+    #pickbox {
+        width: 60; height: auto; padding: 1 2;
+        background: $surface; border: round $accent;
+    }
+    #pickhint { height: auto; padding-bottom: 1; }
+    #pickquery { margin-bottom: 1; }
+    #pickoptions { height: 12; }
     """
 
     def __init__(

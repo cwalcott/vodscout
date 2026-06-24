@@ -15,6 +15,24 @@ Format:
 
 ---
 
+## 2026-06-23 — TUI: search-to-favorite emote picker (`/`)
+
+- Favoriting an emote used to mean `tab` into the Emotes pane and arrow down to
+  it — tedious when a chat has a long emote tail. Added `/` on the VOD window: a
+  type-to-filter picker over the VOD's emotes; ↑↓ move, Enter favorites the
+  highlighted match, Esc cancels.
+- Chose a **dedicated modal picker** over filtering the pane in place. The
+  in-pane filter would have reused `f`/Enter for free, but the modal was the
+  clearer mental model when offered.
+- Scoped to **this VOD's emotes** (the pane's existing universe), not all of the
+  streamer's downloaded VODs. There's no offline catalogue of every Twitch emote,
+  and favorites exist to pin emotes that actually pop off in chat, so the VOD's
+  own emotes are the right search space.
+- `/` works regardless of which pane has focus (the modal is self-contained), and
+  Enter **toggles** — favoriting, or un-favoriting an already-`★` emote — sharing
+  the same toggle/persist path as the inline `f`. The picker covers the pane, so
+  it adds a confirmation toast the inline `f` doesn't need.
+
 ## 2026-06-23 — TUI: infer watched ranges at download time, not just on open
 
 - A freshly-downloaded VOD used to show `0%` watched in the list until you
