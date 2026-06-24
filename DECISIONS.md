@@ -15,6 +15,52 @@ Format:
 
 ---
 
+## 2026-06-24 — Renamed `vodchat` → `vodscout`
+
+- Settled the working title before going public. `vodchat` was descriptive but
+  generic (two of the most common words in the space) and named the *input* (chat)
+  rather than the value (finding the good moments in the parts you haven't watched).
+  `vodscout` keeps it in-domain (VOD-prefixed, reads as a Twitch tool instantly) while
+  pointing at the discovery/scout-ahead idea, and is more ownable. Free on PyPI.
+- Mechanical rename across the repo: package dir (`git mv`), all imports, the console
+  script + command name (`vodscout`), `VodscoutApp`, config path
+  (`~/.config/vodchat` → `~/.config/vodscout`) and default `chat_dir`, pyproject
+  metadata/urls, lockfile, and all docs. Existing `~/.config/vodchat/` configs are not
+  auto-migrated — fine, still pre-release. Historical "vodchat" mentions in this log
+  were updated too since the name was always flagged a non-final working title (unlike
+  the `list`→`vods` command history, which is left as-was). GitHub repo rename + local
+  dir rename are manual follow-ups outside the code.
+
+## 2026-06-23 — PARKED: in-TUI "Tune detection" modal (designed, not built)
+
+- Idea: edit detection thresholds from inside the TUI instead of hand-editing
+  `~/.config/vodscout/config.toml` between runs. Came out of the "is 60s too long a
+  bucket?" discussion — the win is a tight tune-and-look loop (change `bucket_seconds`
+  → moments redraw on the open VOD), the TUI equivalent of the `--gap` flag added for
+  `watched --infer`. Settled the design with the user, then **deferred building it.**
+- **Scope: detection thresholds only** (`bucket_seconds` + `gap_threshold_seconds`),
+  not a generic settings panel. `bucket_seconds` is the live star (re-analyzes the
+  open VOD); `gap` rounds it out cheaply but only bites on the next `i` infer.
+  Identity/path keys stay out: `chat_dir` is restart-class (list/sidecars/in-flight
+  downloads all key off it — live edit = confusing half-states), and
+  `twitch_username`/`default_streamer` are near-never changed mid-session.
+- **Persistence: apply-live + explicit "save default."** `enter` applies to
+  `app.config` for the session (moments redraw); `s` also writes config.toml via
+  `config.save` (comment-preserving, already only emits `[analysis]` when non-default);
+  `esc` cancels. Mirrors the `--gap` philosophy: experiment freely, bake when settled.
+- **Shape if/when built:** `TuneDetectionScreen(ModalScreen[bool])` near
+  `WatchedEditScreen` (same return-bool, caller-refreshes pattern); holds a *local*
+  working copy so `esc` needs no revert. Two steppers — `↑↓`/`tab` switch field,
+  `←→` adjust; bucket walks a ladder `[10,15,20,30,45,60,90,120]`, gap ±30 (floor 30).
+  Live hint `baseline window ≈ analyzer.BASELINE_BUCKETS * bucket // 60 min` surfaces
+  the bucket↔baseline coupling at the point of choice. Bind `t` on `VodScreen` only
+  (the list has no moments to redraw); callback re-runs `_load_moments()` →
+  `_populate_moments()`. Pull the bucket-ladder step into a pure helper to unit-test;
+  validate the modal headlessly with a `run_test` pilot per the UI-untested convention.
+- Open follow-on if it ever ships: a no-`--bucket`-flag-yet gap — could add an
+  `analyze --bucket N` CLI flag too, so the tune-and-look loop exists outside the TUI
+  (parallel to `--gap`). Not built either; same parked status.
+
 ## 2026-06-23 — TUI: search-to-favorite emote picker (`/`)
 
 - Favoriting an emote used to mean `tab` into the Emotes pane and arrow down to
@@ -59,7 +105,7 @@ Format:
   confirm modal (`ConfirmQuitScreen`, `y` quit / `esc`·`n` keep downloading) —
   but *only* when something is actually downloading; an idle `q` still exits
   immediately. Wording is concise, mirroring `ConfirmDownloadScreen`.
-- Implemented by overriding `VodchatApp.action_quit` rather than re-binding `q`
+- Implemented by overriding `VodscoutApp.action_quit` rather than re-binding `q`
   on each screen: in Textual 8.2.7 every quit path funnels through the app's
   `quit` action (ctrl+c doesn't even exit — it just notifies), and both the list
   and VOD-window `q` bindings point at `app.quit`, so one override covers them
@@ -332,7 +378,7 @@ Format:
 - Skipped pydantic: config is shallow (flat keys + per-streamer emote dicts), a dataclass is sufficient.
 - Skipped mypy: solo side project, annotation friction not worth the bug-catch benefit at this scale.
 - Dev tooling: uv for venv/install workflow, ruff for lint+format (replaces black/isort/flake8).
-- Default chat_dir in interactive setup is ~/Documents/vodchat: visible in Finder, natural on macOS; user with a sync folder (e.g. Synology) will override it.
+- Default chat_dir in interactive setup is ~/Documents/vodscout: visible in Finder, natural on macOS; user with a sync folder (e.g. Synology) will override it.
 - Chat download uses Twitch's unofficial GQL endpoint directly (DIY, ~30 lines of requests): chat-downloader was broken (stale client ID), TwitchDownloaderCLI requires an external binary, and all alternatives use the same GQL endpoint anyway. ToS risk is the same regardless of implementation layer.
 - Dropped dual-backend (chat-downloader + TwitchDownloaderCLI) design: files are ephemeral, no archive-consistency requirement, one backend is simpler to maintain.
 - Chat log format: JSON-lines in .txt files. One JSON object per line: {"time": <int seconds>, "user": <login>, "msg": <text>, "emotes": [<emote_id>, ...]}. "emotes" key omitted when empty. Third-party emotes (BTTV/FFZ/7TV) appear as plain text in "msg" since they're not in Twitch's emote system.
@@ -389,16 +435,16 @@ Format:
 - Library choice: **questionary + Rich**, after surveying the field. Considered and rejected for now: a full TUI (Textual/prompt_toolkit) — deferred, the lightweight sequence-of-prompts model is enough to settle the interaction shape first (same "feel it out before specifying" reasoning that deferred the `watched` REPL). InquirerPy — its native fuzzy prompt was the only edge over questionary, but it's stale (last release 0.3.3, 2022) vs. questionary being actively maintained and more widely used; the emote-picker fuzzy need is already covered by the existing forgiving `resolve_emote` + questionary's `autocomplete`. fzf — rejected, external binary cuts against the zero-setup principle.
 - All interactive deps confined to `ui.py`; the three legs never import it, so the choice is swappable later without architectural churn.
 - Extracted the merged local+remote list builder from `cli._vod_list` into `vodlist.merged_vods` so both front ends show the same list from one place. `cli.py`'s `_render`/`_download_*` stay put (click-specific output); `ui.py` renders with Rich.
-- Entry point: `@click.group(invoke_without_command=True)` so bare `vodchat` launches the shell; explicit `vodchat browse [streamer]` too. Streamer resolves arg → `default_streamer` config key → prompt. `ui` is lazy-imported inside the command callbacks so non-interactive commands (`analyze`, etc.) don't pull questionary/prompt_toolkit at startup.
+- Entry point: `@click.group(invoke_without_command=True)` so bare `vodscout` launches the shell; explicit `vodscout browse [streamer]` too. Streamer resolves arg → `default_streamer` config key → prompt. `ui` is lazy-imported inside the command callbacks so non-interactive commands (`analyze`, etc.) don't pull questionary/prompt_toolkit at startup.
 - Added `default_streamer` config key (top-level), written by save and prompted for (optional) in interactive setup.
 - Slice 1 scope: navigation only (list → arrow-select VOD → detail view → back/quit). Per-VOD actions (analyze/watched/emotes/download, plus new delete + `watched --clear`) are later slices, each landing as both a shell action and a real CLI command so nothing is trapped behind interactivity. Keyboard/prompt-wording decisions deferred until there's real use to react to.
-- First UX tweaks after a real run: (1) downloaded rows are greyed in the select list (questionary renders a `(style, text)` tuple as formatted text — `fg:ansibrightblack`), mirroring the dimmed rows in `vodchat vods`; a plain str stays default-colored. (2) Long VOD titles truncated to `_TITLE_MAX=45` chars + ellipsis. (3) `q` quits the shell from any select menu — questionary has no built-in quit key, so a `_select` helper adds a `q` binding to the underlying prompt_toolkit app (`event.app.exit(result=_QUIT)`); the explicit Quit choice stays for discoverability.
+- First UX tweaks after a real run: (1) downloaded rows are greyed in the select list (questionary renders a `(style, text)` tuple as formatted text — `fg:ansibrightblack`), mirroring the dimmed rows in `vodscout vods`; a plain str stays default-colored. (2) Long VOD titles truncated to `_TITLE_MAX=45` chars + ellipsis. (3) `q` quits the shell from any select menu — questionary has no built-in quit key, so a `_select` helper adds a `q` binding to the underlying prompt_toolkit app (`event.app.exit(result=_QUIT)`); the explicit Quit choice stays for discoverability.
 
 ## 2026-06-21 — interactive shell slice 2: VOD actions
 
 - Wired the read-only analyses onto the shell's VOD detail view: Analyze (chat volume), Analyze an emote, Top emotes, Watched ranges (view). The action menu loops on the VOD so several analyses can be run before going back; output prints above, the menu reappears below.
 - Extracted the analyze orchestration out of `cli.analyze` into a new `actions.py` (`analyze` → `AnalysisResult(moments, emote, emote_matches)`, raising `EmoteNotFound`; plus `emote_counts`). Both front ends call it. Why a new module and not `analyzer`: it composes analyzer + watched, and `watched` already imports `analyzer`, so analyzer can't import watched (cycle) — the cross-leg glue lives one level up, same as `vodlist`. `analyzer.report` (already Rich) stays the shared moments renderer, called directly by `ui`.
-- `cli.analyze` and the `emotes` VOD branch refactored onto `actions`; CLI behavior preserved (incl. the `EmoteNotFound` → "See `vodchat emotes <id>`" hint, kept CLI-side via the typed exception).
+- `cli.analyze` and the `emotes` VOD branch refactored onto `actions`; CLI behavior preserved (incl. the `EmoteNotFound` → "See `vodscout emotes <id>`" hint, kept CLI-side via the typed exception).
 - Actions are offered only for downloaded VODs (they need the chat log); a not-yet-downloaded VOD shows just Back/Quit with a "download to analyze — coming soon" note. Download lands in slice 3.
 - Emote picker: `questionary.autocomplete` seeded with the VOD's emotes (most-used first), `match_middle=True` so `lma` finds `LMAOOOOOOOOOO`; pulled forward from the slice-4 polish list on user request. Whatever is typed still goes through the forgiving `resolve_emote`, so a free-typed name works too.
 - Analyze options in the shell use defaults only (top 10, unwatched-only) — no per-run prompts for count/include-watched, to keep it a single keypress. The CLI still exposes `--top`/`--include-watched` for control.
@@ -407,11 +453,11 @@ Format:
 ## 2026-06-21 — interactive shell slice 3: download / delete / clear
 
 - Shell can now acquire and remove VODs, not just read. VOD view: a not-yet-downloaded VOD offers "Download chat" (reuses `fetcher.fetch_by_url`, flips the row to downloaded in place so the analysis actions unlock without leaving the view); a downloaded VOD offers "Delete VOD…" (confirm → `actions.delete_vod`, then back to the list so it re-merges) and "Clear watched ranges" (only shown when the row has watched data). Streamer list gained "⬇ Download all not-downloaded (N)".
-- New verbs are CLI commands too, so nothing is shell-only: `vodchat delete <id>` (`-y`/`--yes` skips the confirm; find_log precheck gives a clean error before prompting) and `vodchat watched <id> --clear`.
+- New verbs are CLI commands too, so nothing is shell-only: `vodscout delete <id>` (`-y`/`--yes` skips the confirm; find_log precheck gives a clean error before prompting) and `vodscout watched <id> --clear`.
 - `actions.delete_vod(vod_id, config)` removes the chat log + `.meta.json` + `.watched.json`, returning the paths actually removed (sidecars are optional). Lives in `actions` (not `fetcher`) because it's cross-cutting and both front ends use it; locates the VOD via `analyzer.find_log` so "find this id under any streamer" stays in one place.
 - `watched.clear(vod_id, chat_dir)` deletes the `.watched.json` (returns True if one existed). Clearing = "no watched data": `load` already treats a missing file as empty ranges, so removal returns the VOD to pristine state — cleaner than writing an empty-ranges file. This is the parked `watched --clear` item, now built.
 - Delete confirmation defaults to NO (`questionary.confirm(default=False)` / `click.confirm`); download-all defaults to YES. Destructive = guarded, additive = one keypress.
-- Drive-by: `analyzer.find_log`'s "not found" message still said `vodchat fetch --url` (renamed to `vodchat vods --url` when fetch+list merged). Fixed.
+- Drive-by: `analyzer.find_log`'s "not found" message still said `vodscout fetch --url` (renamed to `vodscout vods --url` when fetch+list merged). Fixed.
 - Tests: `delete_vod` (removes all sidecars + returns paths, only-existing-sidecars, missing-log raises) and `watched.clear` (removes file + load-treats-missing-as-empty, idempotent false). Verified the `delete`/`--clear` CLI wiring end-to-end with a CliRunner smoke test.
 
 ## 2026-06-21 — interactive shell: watched submenu (manual add)

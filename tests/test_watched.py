@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from vodchat import watched
-from vodchat.watched import WatchedRange, WatchedRanges
+from vodscout import watched
+from vodscout.watched import WatchedRange, WatchedRanges
 
 
 @pytest.fixture

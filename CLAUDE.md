@@ -6,9 +6,9 @@ than once. Architecture/design rationale belongs in `SPEC.md`, not here.
 
 ## Project
 
-`vodchat` — CLI tool for Twitch VOD chat: download chat logs, track
+`vodscout` — CLI tool for Twitch VOD chat: download chat logs, track
 watched/unwatched time ranges per VOD, analyze chat for interesting
-moments. Working name, not final.
+moments.
 
 Read `SPEC.md` first for the full architecture and rationale. Read
 `DECISIONS.md` for a dated log of specific decisions made while building
@@ -17,7 +17,7 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 ## Stack
 
 - Python
-- Config: TOML (`~/.config/vodchat/config.toml`)
+- Config: TOML (`~/.config/vodscout/config.toml`)
 - Twitch's public GQL endpoint (`gql.twitch.tv`, public web Client-ID)
   for both chat download and streamer-name VOD discovery — no credentials.
   Single in-process backend (direct `requests`); the earlier

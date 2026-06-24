@@ -1,7 +1,7 @@
 import json
 
-from vodchat import fetcher, vodlist
-from vodchat.config import Config
+from vodscout import fetcher, vodlist
+from vodscout.config import Config
 
 
 def _remote(

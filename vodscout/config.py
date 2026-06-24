@@ -3,7 +3,7 @@ from pathlib import Path
 
 import tomlkit
 
-CONFIG_PATH = Path("~/.config/vodchat/config.toml").expanduser()
+CONFIG_PATH = Path("~/.config/vodscout/config.toml").expanduser()
 
 
 @dataclass
@@ -71,11 +71,11 @@ def save(config: "Config") -> None:
 def setup_interactive() -> "Config":
     import click
 
-    click.echo("No config found at ~/.config/vodchat/config.toml — let's set it up.\n")
+    click.echo("No config found at ~/.config/vodscout/config.toml — let's set it up.\n")
 
     chat_dir_str = click.prompt(
         "Chat directory (where VOD logs will be stored)",
-        default="~/Documents/vodchat",
+        default="~/Documents/vodscout",
     )
     chat_dir = Path(chat_dir_str).expanduser()
 

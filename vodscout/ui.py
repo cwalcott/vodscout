@@ -51,11 +51,11 @@ from textual.widgets import (
 from textual.widgets.option_list import Option
 from textual.worker import Worker, WorkerState
 
-from vodchat import actions, fetcher, vodlist
-from vodchat import analyzer as an
-from vodchat import config as cfg
-from vodchat import favorites as fav
-from vodchat import watched as wt
+from vodscout import actions, fetcher, vodlist
+from vodscout import analyzer as an
+from vodscout import config as cfg
+from vodscout import favorites as fav
+from vodscout import watched as wt
 
 
 def _coverage_bar(watched_seconds: int, duration_seconds: int, width: int = 5) -> str:
@@ -918,7 +918,7 @@ class WatchedEditScreen(ModalScreen[bool]):
         self.dismiss(True)
 
 
-class VodchatApp(App):
+class VodscoutApp(App):
     """Top-level Textual app. Holds the cross-screen state the screens read:
     the resolved config, the current streamer, and the offline flag."""
 
@@ -964,7 +964,7 @@ class VodchatApp(App):
         self.offline = offline
 
     def on_mount(self) -> None:
-        self.title = "vodchat"
+        self.title = "vodscout"
         self.sub_title = self.streamer
         self.push_screen(VodListScreen())
 
@@ -1000,7 +1000,7 @@ class VodchatApp(App):
 def run_shell(
     config: "cfg.Config", streamer: str | None = None, *, offline: bool = False
 ) -> None:
-    """Entry point for `vodchat browse` and bare `vodchat`.
+    """Entry point for `vodscout browse` and bare `vodscout`.
 
     Resolves the streamer (argument → config.default_streamer → a one-off
     prompt), then launches the Textual app against the real merged VOD list.
@@ -1014,4 +1014,4 @@ def run_shell(
         ).strip()
     if not streamer:
         return
-    VodchatApp(config, streamer, offline).run()
+    VodscoutApp(config, streamer, offline).run()

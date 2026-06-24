@@ -37,7 +37,7 @@ def find_log(vod_id: str, chat_dir: Path) -> tuple[str, Path]:
     if not matches:
         raise FileNotFoundError(
             f"No chat log found for VOD {vod_id!r}. "
-            f"Download it first with: vodchat vods --url <url>"
+            f"Download it first with: vodscout vods --url <url>"
         )
     if len(matches) > 1:
         streamers = ", ".join(p.parent.name for p in sorted(matches))

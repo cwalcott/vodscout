@@ -2,7 +2,7 @@ from collections import Counter
 
 import pytest
 
-from vodchat.analyzer import (
+from vodscout.analyzer import (
     MIN_BASELINE,
     MIN_BASELINE_SAMPLES,
     Moment,

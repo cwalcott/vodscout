@@ -1,4 +1,4 @@
-from vodchat import favorites
+from vodscout import favorites
 
 
 def test_load_missing_returns_empty(tmp_path):

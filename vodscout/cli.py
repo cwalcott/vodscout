@@ -2,10 +2,10 @@ from collections import Counter
 
 import click
 
-from vodchat import actions, fetcher, vodlist
-from vodchat import analyzer as an
-from vodchat import config as cfg
-from vodchat import watched as wt
+from vodscout import actions, fetcher, vodlist
+from vodscout import analyzer as an
+from vodscout import config as cfg
+from vodscout import watched as wt
 
 
 @click.group(invoke_without_command=True)
@@ -18,7 +18,7 @@ def main(ctx: click.Context) -> None:
     ctx.ensure_object(dict)
     ctx.obj["config"] = cfg.load()
     if ctx.invoked_subcommand is None:
-        from vodchat import ui
+        from vodscout import ui
 
         ui.run_shell(ctx.obj["config"])
 
@@ -35,7 +35,7 @@ def browse(ctx: click.Context, streamer: str | None, offline: bool) -> None:
     Opens a navigable session: pick a streamer (or pass one / set
     default_streamer), arrow through the merged VOD list, and drill into a VOD.
     """
-    from vodchat import ui
+    from vodscout import ui
 
     ui.run_shell(ctx.obj["config"], streamer, offline=offline)
 
@@ -336,7 +336,7 @@ def analyze(
 
     By default, ranks moments where overall chat volume spiked, annotated with
     the emotes most used in each. With --emote, ranks moments where that one
-    emote spiked above its own normal rate (see `vodchat emotes` to discover
+    emote spiked above its own normal rate (see `vodscout emotes` to discover
     which emotes a chat spams).
     """
     config = ctx.obj["config"]
@@ -346,7 +346,7 @@ def analyze(
         )
     except actions.EmoteNotFound as e:
         raise click.ClickException(
-            f"{e} See `vodchat emotes {vod_id}` for what's used."
+            f"{e} See `vodscout emotes {vod_id}` for what's used."
         )
     except (FileNotFoundError, ValueError) as e:
         raise click.ClickException(str(e))

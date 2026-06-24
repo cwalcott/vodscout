@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from vodchat import fetcher
-from vodchat.config import Config
-from vodchat.fetcher import (
+from vodscout import fetcher
+from vodscout.config import Config
+from vodscout.fetcher import (
     _scan_third_party,
     _vod_id_from_url,
     cached_vods,

@@ -6,8 +6,8 @@ a watched-file existence check) but holds no state and is imported by both the
 command-line and interactive front ends so they show the same list.
 """
 
-from vodchat import config as cfg
-from vodchat import fetcher
+from vodscout import config as cfg
+from vodscout import fetcher
 
 
 def merged_vods(

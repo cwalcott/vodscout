@@ -2,9 +2,9 @@ import json
 
 import pytest
 
-from vodchat import actions
-from vodchat.config import Config
-from vodchat.watched import WatchedRange, WatchedRanges, save
+from vodscout import actions
+from vodscout.config import Config
+from vodscout.watched import WatchedRange, WatchedRanges, save
 
 
 def _write_log(chat_dir, streamer, vod_id, messages):
@@ -119,7 +119,7 @@ def test_add_ranges_merges_and_persists(config):
     result = actions.add_ranges("111", config, [WatchedRange(300, 1200, "manual")])
     assert result.ranges == [WatchedRange(0, 1200, "manual")]
     # Persisted: a fresh load sees the merged range.
-    from vodchat import watched
+    from vodscout import watched
 
     assert watched.load("111", config.chat_dir).ranges == [
         WatchedRange(0, 1200, "manual")

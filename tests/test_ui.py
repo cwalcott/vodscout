@@ -5,7 +5,7 @@ async pilot harness); this just pins the search-filter logic behind the
 `/` favorite picker, which is plain data-in/data-out.
 """
 
-from vodchat.ui import _match_emotes
+from vodscout.ui import _match_emotes
 
 ITEMS = [("KEKW", 1203), ("PogChamp", 842), ("LULW", 611), ("kekw", 12)]
 

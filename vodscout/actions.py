@@ -11,8 +11,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
-from vodchat import analyzer, watched
-from vodchat import config as cfg
+from vodscout import analyzer, watched
+from vodscout import config as cfg
 
 
 class EmoteNotFound(ValueError):

@@ -1,6 +1,4 @@
-# vodchat — Design Spec
-
-> Name is not final. Working title.
+# vodscout — Design Spec
 
 ## What this is
 
@@ -104,7 +102,7 @@ activity in that VOD.
   silence doesn't mean not-watching, and it's blind to VODs watched
   without chatting at all.
 
-**Entry point.** `vodchat watched <vod-id>` shows current ranges; CLI edits
+**Entry point.** `vodscout watched <vod-id>` shows current ranges; CLI edits
 are flag-driven: `--add START-END` (manual range), `--infer` (suggest from
 your chat, with `--user`/`--gap`), `--edit` ($EDITOR). The originally-envisioned
 interactive editing — deferred on the CLI side as an open question — now lives in
@@ -204,7 +202,7 @@ with different highlighted intervals.
 
 The CLI is fully retained — it's scriptable, composable, and good for one-off
 invocations. On top of it (not replacing it) there's an **interactive shell**:
-`vodchat browse [streamer]`, or a bare `vodchat` with no subcommand. The point
+`vodscout browse [streamer]`, or a bare `vodscout` with no subcommand. The point
 is to kill the tedium of stateless re-invocation — re-typing the streamer, then
 copying a VOD id, then re-typing it for each follow-up command. The shell holds
 that context.
@@ -261,11 +259,11 @@ widgets from the same `actions` results.
       <vod_id>.meta.json      # VOD metadata (title, date, duration)
       <vod_id>.watched.json   # watched ranges
   ```
-- **Config file.** TOML, e.g. `~/.config/vodchat/config.toml`:
+- **Config file.** TOML, e.g. `~/.config/vodscout/config.toml`:
   ```toml
   chat_dir = "~/SynologyDrive/chats"
   twitch_username = "..."     # your login, default for `watched --infer`
-  default_streamer = "..."    # streamer the bare `vodchat` shell opens to
+  default_streamer = "..."    # streamer the bare `vodscout` shell opens to
   ```
   First run with no config present should prompt interactively and write
   the file, rather than requiring manual setup.
@@ -278,24 +276,24 @@ widgets from the same `actions` results.
 ## Commands (rough sketch, not final)
 
 ```
-vodchat                                # interactive shell (uses default_streamer if set)
-vodchat browse <streamer>              # interactive shell, opened to a streamer
-vodchat vods <streamer>                # browse: your downloads + recent Twitch VODs, merged
-vodchat vods <streamer> --offline      # browse local downloads only, no Twitch call
-vodchat vods <streamer> --all          # download all not-yet-downloaded VODs
-vodchat vods <streamer> --get 1,3      # download those rows from the list
-vodchat vods <streamer> --pick         # list, then prompt for which to download
-vodchat vods --url <vod-url>           # download one VOD by URL/ID
-vodchat emotes <vod-id>                # top emotes for one VOD
-vodchat emotes <streamer>              # top emotes across a streamer's VODs
-vodchat watched <vod-id>                # show watched ranges
-vodchat watched <vod-id> --add 1:00:00-1:30:00   # add a manual range
-vodchat watched <vod-id> --infer        # suggest ranges from your own chat
-vodchat watched <vod-id> --edit         # edit the ranges file in $EDITOR
-vodchat watched <vod-id> --clear        # remove all watched ranges
-vodchat analyze <vod-id>                # top moments by chat volume (+ top emotes)
-vodchat analyze <vod-id> --emote <name> # top moments for one emote
-vodchat delete <vod-id>                 # delete a VOD's chat log + sidecars (-y skips confirm)
+vodscout                                # interactive shell (uses default_streamer if set)
+vodscout browse <streamer>              # interactive shell, opened to a streamer
+vodscout vods <streamer>                # browse: your downloads + recent Twitch VODs, merged
+vodscout vods <streamer> --offline      # browse local downloads only, no Twitch call
+vodscout vods <streamer> --all          # download all not-yet-downloaded VODs
+vodscout vods <streamer> --get 1,3      # download those rows from the list
+vodscout vods <streamer> --pick         # list, then prompt for which to download
+vodscout vods --url <vod-url>           # download one VOD by URL/ID
+vodscout emotes <vod-id>                # top emotes for one VOD
+vodscout emotes <streamer>              # top emotes across a streamer's VODs
+vodscout watched <vod-id>                # show watched ranges
+vodscout watched <vod-id> --add 1:00:00-1:30:00   # add a manual range
+vodscout watched <vod-id> --infer        # suggest ranges from your own chat
+vodscout watched <vod-id> --edit         # edit the ranges file in $EDITOR
+vodscout watched <vod-id> --clear        # remove all watched ranges
+vodscout analyze <vod-id>                # top moments by chat volume (+ top emotes)
+vodscout analyze <vod-id> --emote <name> # top moments for one emote
+vodscout delete <vod-id>                 # delete a VOD's chat log + sidecars (-y skips confirm)
 ```
 
 ## Explicitly out of scope (for now)
@@ -319,5 +317,5 @@ vodchat delete <vod-id>                 # delete a VOD's chat log + sidecars (-y
 - Gap-threshold default landed at 180s but is personal/streamer-dependent,
   not a claim of correctness; open whether density-weighting before the
   gap (not just a fixed threshold) is worth the complexity.
-- Exact interactive UX/prompts for `vodchat watched`
+- Exact interactive UX/prompts for `vodscout watched`
 - Exact terminal timeline rendering approach
