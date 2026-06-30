@@ -73,6 +73,14 @@ def _coverage_bar(watched_seconds: int, duration_seconds: int, width: int = 5) -
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
+def _dl_indicator(spin: int, done: int, total: int | None) -> str:
+    frame = _SPINNER[spin]
+    if total:
+        pct = round(100 * done / total)
+        return f"{frame} {pct:>3}%"
+    return frame
+
+
 def _watched_seconds(vod_id: str, config: "cfg.Config") -> int:
     """Total watched time for a VOD, for the coverage bar. 0 if none/unreadable."""
     try:
@@ -113,9 +121,7 @@ def _infer_watched(vod_id: str, config: "cfg.Config") -> int:
     return len(suggested)
 
 
-def _match_emotes(
-    items: list[tuple[str, int]], query: str
-) -> list[tuple[str, int]]:
+def _match_emotes(items: list[tuple[str, int]], query: str) -> list[tuple[str, int]]:
     """Filter (emote, count) pairs by a case-insensitive substring `query`,
     preserving the input order (callers pass them most-used first).
 
@@ -154,7 +160,7 @@ class VodListScreen(Screen):
         # the column can't auto-size to the bar — pin it wide enough that the
         # download/coverage bar always fits (no truncation).
         table.add_column("watched", width=11)
-        table.add_column("", width=2)  # marker: ⬇ downloaded · spinner downloading
+        table.add_column("", width=6)  # marker: ⬇ downloaded · spinner+% downloading
         self._rows: dict[str, dict] = {}
         # vod_id -> (completed_seconds, total_seconds) progress for in-flight
         # background downloads. Workers are owned by this screen (it's the
@@ -355,21 +361,21 @@ class VodListScreen(Screen):
             row = table.get_row_index(vod_id)
         except KeyError:
             return
-        table.update_cell_at(Coordinate(row, 3), _coverage_bar(done, total or 0))
-        table.update_cell_at(Coordinate(row, 4), _SPINNER[self._spin])
+        table.update_cell_at(Coordinate(row, 3), "")
+        table.update_cell_at(Coordinate(row, 4), _dl_indicator(self._spin, done, total))
 
     def _tick_spinner(self) -> None:
         """Advance the download spinner one frame and repaint every in-flight
         row's marker. Runs only while something is downloading."""
         self._spin = (self._spin + 1) % len(_SPINNER)
-        frame = _SPINNER[self._spin]
         table = self.query_one("#vodlist", DataTable)
-        for vod_id in self._downloading:
+        for vod_id, (done, total) in self._downloading.items():
             try:
                 row = table.get_row_index(vod_id)
             except KeyError:
                 continue
-            table.update_cell_at(Coordinate(row, 4), frame)
+            indicator = _dl_indicator(self._spin, done, total)
+            table.update_cell_at(Coordinate(row, 4), indicator)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         if event.worker.group != "downloads":
