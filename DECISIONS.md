@@ -15,7 +15,17 @@ Format:
 
 ---
 
-## 2026-06-24 — Renamed `vodchat` → `vodscout`
+## 2026-07-02 — TUI: Esc backs out of the emote view before leaving the VOD
+
+- On the VOD window, `Esc` was bound straight to `app.pop_screen`, so after
+  drilling into an emote (Enter on the emote pane changes the moments pane *in
+  place*) the universal "back" key skipped past the overall view and dumped you
+  on the VOD list — the only way back to overall was knowing `o`. Now `Esc`
+  backs out one level at a time: emote spike view → overall view → VOD list
+  (a `back` action that calls `action_overall` when `current_emote` is set,
+  else pops). `o` stays as the direct shortcut. First fix picked from a
+  new-user UX walkthrough of the TUI (session notes, not committed); validated
+  headlessly with a `run_test` pilot per the UI-untested convention.
 
 - Settled the working title before going public. `vodchat` was descriptive but
   generic (two of the most common words in the space) and named the *input* (chat)

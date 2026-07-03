@@ -76,7 +76,7 @@ Twitch VODs — and drill into one to see top moments and top emotes side by sid
 | `e` | Edit watched ranges inline |
 | `i` | Re-infer watched ranges from your chat |
 | `Enter` (on a moment/emote) | Open its timestamped link / drill into the emote's own spikes |
-| `Esc` | Back |
+| `Esc` | Back (out of an emote's spike view first, then to the list) |
 
 Downloads are non-blocking — keep browsing while a chat downloads; the row shows
 a live progress bar and flips to downloaded when it finishes.

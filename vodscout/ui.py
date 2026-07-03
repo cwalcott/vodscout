@@ -442,7 +442,7 @@ class VodScreen(Screen):
     """One VOD: top moments (left) + emotes (right), with an All/Unwatched mode."""
 
     BINDINGS = [
-        ("escape", "app.pop_screen", "Back"),
+        ("escape", "back", "Back"),
         ("w", "toggle_mode", "All/Unwatched"),
         ("e", "edit", "Edit watched"),
         ("i", "infer", "Infer watched"),
@@ -592,6 +592,15 @@ class VodScreen(Screen):
             table.add_row(f"{star}{name}", str(n), key=name)
 
     # --- actions ---------------------------------------------------------
+
+    def action_back(self) -> None:
+        """Esc backs out one level at a time: drilling into an emote changes the
+        moments pane in place, so Esc first undoes that (back to the overall
+        view, same as `o`) and only pops to the VOD list from overall."""
+        if self.current_emote is not None:
+            self.action_overall()
+        else:
+            self.app.pop_screen()
 
     def action_toggle_mode(self) -> None:
         self.show_all = not self.show_all
