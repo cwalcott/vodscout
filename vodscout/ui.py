@@ -444,6 +444,7 @@ class VodScreen(Screen):
     BINDINGS = [
         ("escape", "back", "Back"),
         ("w", "toggle_mode", "All/Unwatched"),
+        ("m", "mark_watched", "Mark watched"),
         ("e", "edit", "Edit watched"),
         ("i", "infer", "Infer watched"),
         ("f", "favorite", "★ emote"),
@@ -613,6 +614,46 @@ class VodScreen(Screen):
             self._load_moments()
             self._refresh_header()
             self._populate_moments()
+
+    def action_mark_watched(self) -> None:
+        """Mark the highlighted moment's spike window as watched (`m`).
+
+        Records the moment's full run window (the stretch of elevated buckets,
+        not just the peak) as a watched range with source "moment". Because
+        watched filtering is keyed on time, this suppresses the same period in
+        every view — overall and each emote's spikes — so a checked moment
+        stops resurfacing under different emotes. Undo by removing the range
+        in the `e` editor.
+        """
+        table = self.query_one("#moments", DataTable)
+        if not table.has_focus:
+            self.notify("Tab to the Moments pane first, then m to mark.")
+            return
+        if table.row_count == 0:
+            return
+        row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        key = row_key.value
+        if not key or not str(key).isdigit():
+            return  # the "(nothing in this view)" placeholder row
+        ts = int(key)
+        moment = next((m for m in self._raw_moments if m.timestamp_seconds == ts), None)
+        if moment is None:
+            return
+        if moment.watched:
+            self.notify("Already watched.")
+            return
+        actions.add_ranges(
+            self.vod["id"],
+            self.app.config,
+            [wt.WatchedRange(moment.start_seconds, moment.end_seconds, "moment")],
+        )
+        self._recompute_coverage()
+        self._refresh_header()
+        self._load_moments()
+        self._populate_moments()
+        start = an._format_timestamp(moment.start_seconds)
+        end = an._format_timestamp(moment.end_seconds)
+        self.notify(f"Marked {start}–{end} watched.")
 
     def action_edit(self) -> None:
         """Open the inline watched-range editor; refresh on save."""

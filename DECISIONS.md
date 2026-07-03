@@ -15,6 +15,33 @@ Format:
 
 ---
 
+## 2026-07-02 — TUI: `m` marks a moment's spike window watched (experiment)
+
+- New `m` on the VOD window: adds the highlighted moment's **full run window**
+  (the whole stretch of elevated buckets, not just the 60s peak — `Moment` now
+  carries `start_seconds`/`end_seconds` from the run) as a watched range with
+  a new source tag `"moment"`. Undo = delete the line in the `e` editor;
+  deliberately no toggle (unmarking would need range-carving, which the
+  watched leg deliberately lacks).
+- Motivation (user's real workflow): chat inference only sees *live* viewing —
+  VOD replay can't produce chat messages, so catch-up viewing driven by the
+  tool's own links was invisible, and the same event kept resurfacing across
+  the overall + per-emote views. Marking is time-keyed, so one mark suppresses
+  that period in **every** view — that cross-view unification is why this
+  reuses watched ranges rather than a per-moment "dismissed" list (same
+  filter contract: `.watched.json` has always operationally meant "don't
+  surface this region again"). Coverage pollution is negligible at this scale
+  (a few 1–3 min windows vs. multi-hour VODs), and the source tag keeps the
+  ranges identifiable.
+- Explicitly an **experiment** — cheap to revert if it turns out to be
+  ceremony (mostly bites when returning to a VOD across sessions). CLI parity
+  is deemed covered by `watched --add` (moment numbering is view-dependent, so
+  a "mark moment N" command would be ambiguous). Follows the `f` pattern:
+  requires the Moments pane focused, corrective toast otherwise. Validated
+  headlessly with a `run_test` pilot (persist + source tag, leaves the
+  Unwatched view, suppressed in the emote view, focus + already-watched
+  guards).
+
 ## 2026-07-02 — TUI: Esc backs out of the emote view before leaving the VOD
 
 - On the VOD window, `Esc` was bound straight to `app.pop_screen`, so after

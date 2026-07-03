@@ -16,6 +16,11 @@ class Moment:
     timestamp_seconds: int
     magnitude: float
     watched: bool = False
+    # The spike's full run window [start, end) in seconds — the whole stretch
+    # of elevated buckets, not just the peak. This is the honest span of "the
+    # moment", used when marking one watched.
+    start_seconds: int = 0
+    end_seconds: int = 0
     # Overall view: top emotes used in the spike window, as (name, count).
     top_emotes: list[tuple[str, int]] = field(default_factory=list)
     # Per-emote view: raw uses of the chosen emote in the peak bucket.
@@ -142,6 +147,8 @@ def detect_spikes(
             Moment(
                 timestamp_seconds=run.peak * bucket_seconds,
                 magnitude=round(run.magnitude, 2),
+                start_seconds=run.start * bucket_seconds,
+                end_seconds=run.end * bucket_seconds,
                 top_emotes=Counter(window).most_common(top_emotes),
             )
         )
@@ -177,6 +184,8 @@ def detect_emote_spikes(
             Moment(
                 timestamp_seconds=run.peak * bucket_seconds,
                 magnitude=round(run.magnitude, 2),
+                start_seconds=run.start * bucket_seconds,
+                end_seconds=run.end * bucket_seconds,
                 count=int(counts[run.peak]),
             )
         )

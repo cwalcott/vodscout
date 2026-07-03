@@ -10,7 +10,7 @@ from vodscout import analyzer
 class WatchedRange:
     start_seconds: int
     end_seconds: int
-    source: str  # "manual" or "chat-inferred"
+    source: str  # "manual", "chat-inferred", or "moment" (a marked spike window)
 
 
 @dataclass

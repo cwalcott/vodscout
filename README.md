@@ -71,6 +71,7 @@ Twitch VODs — and drill into one to see top moments and top emotes side by sid
 | `d` | Download the highlighted VOD's chat (runs in the background) |
 | `Enter` | Open a downloaded VOD (or confirm a download for one that isn't) |
 | `w` | Toggle the moment list between All / Unwatched |
+| `m` | Mark the highlighted moment's spike window watched (undo via `e`) |
 | `f` | Favorite the highlighted emote (pins it to the top) |
 | `/` | Search the VOD's emotes to favorite one |
 | `e` | Edit watched ranges inline |

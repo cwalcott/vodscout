@@ -72,6 +72,19 @@ def test_adjacent_buckets_merge_into_one_moment():
     assert m.magnitude == pytest.approx(50 / expected_baseline, abs=0.01)
 
 
+def test_moment_carries_its_run_window():
+    # 30 quiet buckets, then a 3-bucket surge: the moment's window spans the
+    # whole run [start, end), with the peak timestamp inside it.
+    base = {i: 5 for i in range(30)}
+    msgs = _build(base | {30: 30, 31: 50, 32: 30})
+    moments = detect_spikes(msgs, 60)
+    assert len(moments) == 1
+    m = moments[0]
+    assert m.start_seconds == 30 * 60
+    assert m.end_seconds == 33 * 60
+    assert m.start_seconds <= m.timestamp_seconds < m.end_seconds
+
+
 def test_two_separate_surges_produce_two_moments():
     base = {i: 5 for i in range(30)}
     surges = {30: 50, 60: 50}  # gap of 29 non-flagged buckets between them
@@ -142,6 +155,7 @@ def test_detect_emote_spikes_finds_emote_surge():
     assert m.timestamp_seconds == 30 * 60
     assert m.magnitude == pytest.approx(10.0)
     assert m.count == 50  # raw uses in the peak bucket
+    assert (m.start_seconds, m.end_seconds) == (30 * 60, 31 * 60)  # run window
 
 
 def test_detect_emote_spikes_counts_repeats_in_one_message():
