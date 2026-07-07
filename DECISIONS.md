@@ -15,6 +15,19 @@ Format:
 
 ---
 
+## 2026-07-07 — TUI: VOD-list titles fit the window instead of scrolling
+
+- Long VOD titles were auto-sizing the list's title column past the viewport,
+  forcing a horizontal scroll even in a wide terminal. Now the title column is
+  fitted to the space left after the other columns and any overflow is cut with
+  an ellipsis (`_ellipsize`, cell-accurate so emoji/wide chars don't re-overflow).
+- Fit is dynamic, not a fixed cap: `_apply_title_width` recomputes the budget on
+  every resize (and after each repopulate), so a wider window shows more title.
+  Full titles are kept in `self._rows`, so re-truncation is always from source;
+  `update_cell(update_width=True)` lets the column shrink back down.
+
+---
+
 ## 2026-07-02 — TUI: `m` marks a moment's spike window watched (experiment)
 
 - New `m` on the VOD window: adds the highlighted moment's **full run window**

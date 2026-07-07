@@ -33,6 +33,7 @@ import webbrowser
 from collections import Counter
 from functools import partial
 
+from rich.cells import cell_len, set_cell_size
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -79,6 +80,26 @@ def _dl_indicator(spin: int, done: int, total: int | None) -> str:
         pct = round(100 * done / total)
         return f"{frame} {pct:>3}%"
     return frame
+
+
+# Never squeeze the title column below this many cells, even on a narrow
+# terminal — past this a horizontal scroll is the lesser evil than a title
+# clipped to nothing.
+_MIN_TITLE = 15
+
+
+def _ellipsize(text: str, width: int) -> str:
+    """Truncate `text` to fit `width` terminal cells, marking any cut with a
+    trailing ellipsis. Cell-accurate (Twitch titles carry emoji/wide chars), so
+    the result never overflows its column — which is what was widening the VOD
+    list into a horizontal scroll for long titles."""
+    if width <= 0:
+        return ""
+    if cell_len(text) <= width:
+        return text
+    if width == 1:
+        return "…"
+    return set_cell_size(text, width - 1) + "…"
 
 
 def _watched_seconds(vod_id: str, config: "cfg.Config") -> int:
@@ -155,7 +176,10 @@ class VodListScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#vodlist", DataTable)
-        table.add_columns("date", "length", "title")
+        # Keep the title column's key: its width is fitted to whatever space is
+        # left after the other columns (see _apply_title_width), so a long title
+        # is ellipsized rather than scrolling the table sideways.
+        *_, self._title_key = table.add_columns("date", "length", "title")
         # Fixed widths: the watched cell is blank until a VOD is downloaded, so
         # the column can't auto-size to the bar — pin it wide enough that the
         # download/coverage bar always fits (no truncation).
@@ -208,6 +232,10 @@ class VodListScreen(Screen):
             dl = "⬇" if v["downloaded"] else " "
             table.add_row(date, dur, v["title"] or "(no title)", cov, dl, key=v["id"])
 
+        # Titles went in at full length above; now clip them to the space the
+        # table actually has, so a long one ellipsizes instead of scrolling.
+        self._apply_title_width()
+
         # Re-apply the live indicator for any download still running across a
         # rebuild (a refresh rebuilds the table, but the worker keeps going).
         for vod_id, (done, total) in self._downloading.items():
@@ -221,6 +249,38 @@ class VodListScreen(Screen):
                 self.notify("No local VODs — press r to fetch from Twitch.")
             else:
                 self.notify("No VODs found.", severity="warning")
+
+    def _apply_title_width(self) -> None:
+        """Fit every title into the width left over after the other columns, so a
+        long one is cut with an ellipsis rather than widening the table into a
+        horizontal scroll. Called after a (re)populate and on every resize, so
+        the visible length tracks the window — wider window, more title shown.
+
+        The full titles live in `self._rows`, so re-truncating from scratch is
+        always safe; `update_width=True` lets the column shrink back down (the
+        DataTable rescans the column for its true max, so it doesn't stay stuck
+        at the widest pre-truncation title)."""
+        if not self._rows:
+            return
+        table = self.query_one("#vodlist", DataTable)
+        # table.size is 0 until the first layout; fall back to the terminal width
+        # (less a hair for a possible scrollbar) so the initial paint is close,
+        # then on_resize refines it to the table's real content width.
+        width = table.size.width or max(self.app.size.width - 2, 0)
+        others = sum(
+            col.get_render_width(table)
+            for key, col in table.columns.items()
+            if key != self._title_key
+        )
+        budget = max(width - others - 2 * table.cell_padding, _MIN_TITLE)
+        for vod_id, v in self._rows.items():
+            title = _ellipsize(v["title"] or "(no title)", budget)
+            table.update_cell(vod_id, self._title_key, title, update_width=True)
+
+    def on_resize(self) -> None:
+        # Re-fit titles to the new width (also fires on the first layout, which
+        # is when the table finally knows how wide it is).
+        self._apply_title_width()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         vod = self._rows.get(event.row_key.value)
