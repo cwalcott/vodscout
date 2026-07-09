@@ -15,6 +15,46 @@ Format:
 
 ---
 
+## 2026-07-09 — `delete` keeps metadata; wired into the TUI (`x`)
+
+- **`delete` now keeps `.meta.json`.** `actions.delete_vod` used to remove all
+  three sidecars (`.txt` + `.meta.json` + `.watched.json`); it now removes only
+  the chat log + watched history and **keeps the metadata sidecar**. The kept
+  `.meta.json` (with no `.txt`) is exactly the `cached_vods` undownloaded state,
+  so a deleted VOD stays on the browse list as a re-downloadable row instead of
+  vanishing — "act as if never downloaded" (user's framing). Full byte-level
+  purge is the capability given up; judged marginal (a recent VOD re-caches its
+  meta on the next refresh anyway, and an aged-off deleted VOD's kept meta is
+  pruned on the next online refresh — see below), and re-addable as a
+  `delete --purge` flag if ever wanted.
+- **Chose changing `delete` over adding a second `reset`/`forget` verb** (user's
+  call): one verb, one mental model — `delete` = "throw away what I downloaded
+  and analyzed," the VOD stays browsable. Kept the function name `delete_vod`.
+- **Aged-off caveat (accepted):** deleting a VOD that's dropped out of Twitch's
+  recent ~10 leaves it visible offline, but `merged_vods` prunes undownloaded
+  cache entries not in the recent list on the next *online* refresh, so it
+  disappears then. Consistent — a never-downloaded old VOD isn't listed anyway.
+- **TUI: new `x` on *both* the VOD list and the VOD window.** The Textual TUI had
+  no delete/reset key at all (those verbs were CLI-only since the
+  questionary→Textual rebuild). `x` → `ConfirmDeleteScreen` (mirrors
+  `ConfirmDownloadScreen`/`ConfirmQuitScreen`: explicit `y`, `n`/`esc` cancel,
+  Enter unbound). From the list it deletes the highlighted row in place; from the
+  window it deletes the open VOD and pops back (nothing to show once the chat is
+  gone). Started window-only, then added the list on user request — deleting
+  without drilling in is the natural flow, and it parallels `d` downloading the
+  highlighted row.
+- Both entry points funnel through one `VodListScreen.delete_chat(vod_id)`,
+  mirroring the single-path rule `start_download` already follows; it flips the
+  row back via a new `undownload_row` (inverse of `refresh_row`) and refuses to
+  delete a VOD that's still downloading (that would race the worker writing the
+  chat log). The list's `x` pre-checks downloaded/downloading so an undownloaded
+  row gets a corrective toast rather than a pointless dialog — same shape as the
+  Enter-to-download pre-checks.
+- CLI `delete` reworded to match. Tests updated to assert meta survives;
+  validated headlessly with a `run_test` pilot per the UI-untested convention
+  (list delete, list cancel, undownloaded-row guard, window delete → files
+  gone-but-meta-kept, row undownloaded, still listable via `cached_vods`).
+
 ## 2026-07-07 — TUI: VOD-list titles fit the window instead of scrolling
 
 - Long VOD titles were auto-sizing the list's title column past the viewport,

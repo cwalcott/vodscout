@@ -86,7 +86,7 @@ def test_emote_counts(config):
     assert counts["B"] == 1
 
 
-def test_delete_vod_removes_log_and_sidecars(config):
+def test_delete_vod_removes_chat_and_watched_keeps_meta(config):
     _write_log(config.chat_dir, "shroud", "111", _spiky_messages())
     streamer_dir = config.chat_dir / "shroud"
     (streamer_dir / "111.meta.json").write_text("{}")
@@ -94,17 +94,19 @@ def test_delete_vod_removes_log_and_sidecars(config):
 
     removed = actions.delete_vod("111", config)
 
-    assert len(removed) == 3
+    assert len(removed) == 2
     assert not (streamer_dir / "111.txt").exists()
-    assert not (streamer_dir / "111.meta.json").exists()
     assert not (streamer_dir / "111.watched.json").exists()
+    # Metadata is kept so the VOD stays listed as an undownloaded row.
+    assert (streamer_dir / "111.meta.json").exists()
 
 
-def test_delete_vod_only_removes_existing_sidecars(config):
-    # Log with no sidecars -> only the .txt is removed.
+def test_delete_vod_without_watched_only_removes_chat(config):
+    # Log with no .watched.json -> only the .txt is removed (meta kept if any).
     _write_log(config.chat_dir, "shroud", "111", _spiky_messages())
     removed = actions.delete_vod("111", config)
     assert len(removed) == 1
+    assert not (config.chat_dir / "shroud" / "111.txt").exists()
 
 
 def test_delete_vod_missing_raises(config):

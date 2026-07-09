@@ -213,15 +213,18 @@ and the **selected VOD**. Flow: resolve a streamer (arg → `default_streamer`
 config key → prompt) → arrow through the VOD **list** (on open: your downloads
 plus recent VODs cached from the last refresh, so even not-yet-downloaded ones
 show with no network call; `r` refreshes from Twitch and re-caches; `d`
-downloads the highlighted VOD's chat) → press Enter on a *downloaded* VOD to
-drill into a full-screen VOD **window** showing top moments (left) and
-emotes (right) side by side. Pressing Enter on an *undownloaded* VOD instead asks
-to confirm a download (there's nothing to show until its chat is on disk, so the
-window would be empty). In the window: `w` toggles All/Unwatched (drives the
-moment list), Enter opens a moment's timestamped link or drills into an emote's
-own spikes, `f` favorites the highlighted emote (pinned first) — or `/` opens a
-type-to-filter picker over the VOD's emotes to search-and-favorite one without
-scrolling — Esc returns to the list.
+downloads the highlighted VOD's chat, `x` deletes it) → press Enter on a
+*downloaded* VOD to drill into a full-screen VOD **window** showing top moments
+(left) and emotes (right) side by side. Pressing Enter on an *undownloaded* VOD
+instead asks to confirm a download (there's nothing to show until its chat is on
+disk, so the window would be empty). In the window: `w` toggles All/Unwatched
+(drives the moment list), Enter opens a moment's timestamped link or drills into
+an emote's own spikes, `f` favorites the highlighted emote (pinned first) — or
+`/` opens a type-to-filter picker over the VOD's emotes to search-and-favorite
+one without scrolling — and Esc returns to the list. `x` deletes a VOD's
+downloaded chat + watched history from *either* screen (the list's highlighted
+row, or the open VOD) — always behind a confirm; the VOD stays listed as an
+undownloaded, re-downloadable row.
 Downloads run as a non-blocking background worker — you keep browsing while a
 chat downloads, the row shows a spinner + a live progress bar/percent (how far
 the fetched chat has reached through the VOD), and it flips to downloaded when it
@@ -293,7 +296,7 @@ vodscout watched <vod-id> --edit         # edit the ranges file in $EDITOR
 vodscout watched <vod-id> --clear        # remove all watched ranges
 vodscout analyze <vod-id>                # top moments by chat volume (+ top emotes)
 vodscout analyze <vod-id> --emote <name> # top moments for one emote
-vodscout delete <vod-id>                 # delete a VOD's chat log + sidecars (-y skips confirm)
+vodscout delete <vod-id>                 # delete a VOD's chat + watched history; stays listed (-y skips confirm)
 ```
 
 ## Explicitly out of scope (for now)

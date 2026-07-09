@@ -291,7 +291,11 @@ def _print_ranges(watched_ranges: "wt.WatchedRanges") -> None:
 @click.option("-y", "--yes", is_flag=True, help="Skip the confirmation prompt.")
 @click.pass_context
 def delete(ctx: click.Context, vod_id: str, yes: bool) -> None:
-    """Delete a VOD's chat log and its sidecars (.meta.json, .watched.json)."""
+    """Delete a VOD's downloaded chat and watched history.
+
+    Removes the chat log and watched ranges but keeps the VOD's metadata, so it
+    stays listed and can be re-downloaded — as if never downloaded.
+    """
     config = ctx.obj["config"]
     try:
         streamer, _log = an.find_log(vod_id, config.chat_dir)
@@ -299,7 +303,8 @@ def delete(ctx: click.Context, vod_id: str, yes: bool) -> None:
         raise click.ClickException(str(e))
 
     if not yes and not click.confirm(
-        f"Delete all local files for VOD {vod_id} ({streamer})?"
+        f"Delete downloaded chat and watched history for VOD {vod_id} "
+        f"({streamer})? It stays listed and can be re-downloaded."
     ):
         click.echo("Cancelled.")
         return

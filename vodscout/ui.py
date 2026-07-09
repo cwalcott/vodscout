@@ -166,6 +166,7 @@ class VodListScreen(Screen):
     BINDINGS = [
         ("r", "refresh", "Refresh from Twitch"),
         ("d", "download", "Download chat"),
+        ("x", "delete", "Delete chat"),
         ("q", "app.quit", "Quit"),
     ]
 
@@ -323,6 +324,51 @@ class VodListScreen(Screen):
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         if row_key.value:
             self.start_download(row_key.value)
+
+    def action_delete(self) -> None:
+        """Delete the highlighted row's chat + watched history (`x`), after a
+        confirm. Pre-checks mirror start_download's, so an undownloaded or
+        still-downloading row never gets a pointless dialog."""
+        table = self.query_one("#vodlist", DataTable)
+        if table.row_count == 0:
+            return
+        row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        vod_id = row_key.value
+        vod = self._rows.get(vod_id) if vod_id else None
+        if not vod:
+            return
+        if not vod["downloaded"]:
+            self.notify("Nothing to delete — this VOD isn't downloaded.")
+            return
+        if vod_id in self._downloading:
+            self.notify(f"{vod_id} is still downloading.", severity="warning")
+            return
+
+        def after(confirm: bool | None) -> None:
+            if confirm and self.delete_chat(vod_id):
+                self.app.notify(f"Deleted chat + watched history for VOD {vod_id}.")
+
+        self.app.push_screen(ConfirmDeleteScreen(vod, self.app.streamer), after)
+
+    def delete_chat(self, vod_id: str) -> bool:
+        """Delete one VOD's chat log + watched history and flip its row back to
+        undownloaded. Returns True if it was deleted.
+
+        Both entry points (the list's `x` and the VOD window's `x`) funnel through
+        here, so there's one delete path — mirroring start_download. Callers own
+        the confirm dialog, the success toast, and any navigation.
+        """
+        if vod_id in self._downloading:
+            # Deleting mid-fetch would race the worker writing the chat log.
+            self.app.notify(f"{vod_id} is still downloading.", severity="warning")
+            return False
+        try:
+            actions.delete_vod(vod_id, self.app.config)
+        except (FileNotFoundError, ValueError) as e:
+            self.app.notify(str(e), severity="error")
+            return False
+        self.undownload_row(vod_id)
+        return True
 
     def start_download(self, vod_id: str) -> None:
         """Kick off a non-blocking background fetch of one VOD's chat.
@@ -488,6 +534,17 @@ class VodListScreen(Screen):
         if vod_id in self._rows:
             self._set_row_cells(vod_id, "", " ")
 
+    def undownload_row(self, vod_id: str) -> None:
+        """Flip one row back to undownloaded after its chat is deleted — the
+        inverse of refresh_row. Updates the cached row state (so Enter now
+        offers a re-download) and blanks the watched cell + marker."""
+        vod = self._rows.get(vod_id)
+        if not vod:
+            return
+        vod["downloaded"] = False
+        vod["watched_seconds"] = 0
+        self._set_row_cells(vod_id, "", " ")
+
     def _set_row_cells(self, vod_id: str, coverage: str, marker: str) -> None:
         table = self.query_one("#vodlist", DataTable)
         try:
@@ -510,6 +567,7 @@ class VodScreen(Screen):
         ("f", "favorite", "★ emote"),
         ("/", "favorite_search", "★ search"),
         ("o", "overall", "Overall"),
+        ("x", "delete", "Delete chat"),
         ("q", "app.quit", "Quit"),
     ]
 
@@ -757,6 +815,28 @@ class VodScreen(Screen):
         self._populate_moments()
         self.notify(f"Inferred {len(suggested)} range(s) (merged).")
 
+    def action_delete(self) -> None:
+        """Delete this VOD's downloaded chat + watched history (`x`).
+
+        Keeps the VOD's metadata so it stays on the list as an undownloaded row
+        (re-downloadable), rather than vanishing. Guarded by a confirm — it
+        throws away the chat log and all watched progress. Delegates the delete
+        to the list screen (one delete path), then pops back to it: there's
+        nothing to show for a VOD whose chat is gone.
+        """
+        vod_id = self.vod["id"]
+
+        def after(confirm: bool | None) -> None:
+            if not confirm:
+                return
+            base = self.app._vodlist_screen()
+            if base is None or not base.delete_chat(vod_id):
+                return
+            self.app.pop_screen()
+            self.app.notify(f"Deleted chat + watched history for VOD {vod_id}.")
+
+        self.app.push_screen(ConfirmDeleteScreen(self.vod, self._streamer), after)
+
     def action_favorite(self) -> None:
         table = self.query_one("#emotes", DataTable)
         if not table.has_focus:
@@ -961,6 +1041,46 @@ class ConfirmQuitScreen(ModalScreen[bool]):
                 f"{subject} still running — quitting\n"
                 f"cancels {them} and discards the partial {logs}.\n\n"
                 "[dim]y quit · esc/n keep downloading[/dim]",
+                id="confirmtext",
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class ConfirmDeleteScreen(ModalScreen[bool]):
+    """Confirm-before-delete dialog for a downloaded VOD's chat + watched data.
+
+    Deleting removes the chat log and all watched history but keeps the VOD's
+    metadata, so it stays in the list as an undownloaded row and can be
+    re-downloaded. Requires an explicit `y`; `n`/`esc` cancel. Like the other
+    confirm dialogs, Enter is not bound. Dismisses True on confirm.
+    """
+
+    BINDINGS = [
+        Binding("y", "confirm", "Delete", priority=True),
+        Binding("n", "cancel", "Cancel", priority=True),
+        Binding("escape", "cancel", "Cancel", priority=True),
+    ]
+
+    def __init__(self, vod: dict, streamer: str) -> None:
+        super().__init__()
+        self.vod = vod
+        self.streamer = streamer
+
+    def compose(self) -> ComposeResult:
+        v = self.vod
+        with Vertical(id="confirmbox"):
+            yield Static(
+                "[b]Delete this VOD's chat and watched history?[/b]\n\n"
+                f"{v['title'] or '(no title)'}\n"
+                f"[dim]{self.streamer}[/dim]\n\n"
+                "[dim]Removes the downloaded chat log and all watched\n"
+                "progress. The VOD stays listed — you can re-download it.\n"
+                "y delete · esc/n cancel[/dim]",
                 id="confirmtext",
             )
 

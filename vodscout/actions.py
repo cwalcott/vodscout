@@ -90,17 +90,21 @@ def add_ranges(
 
 
 def delete_vod(vod_id: str, config: "cfg.Config") -> list[Path]:
-    """Delete a VOD's chat log and its sidecars (.meta.json, .watched.json).
+    """Delete a VOD's downloaded chat log and watched history — but keep its
+    metadata sidecar, so it stays in the list as if never downloaded.
 
-    Returns the paths actually removed (sidecars may not all exist). Raises
-    FileNotFoundError if the VOD isn't downloaded, ValueError if its id is
-    ambiguous across streamers — both via find_log.
+    Removes `<id>.txt` (chat) and `<id>.watched.json` (watched ranges);
+    deliberately keeps `<id>.meta.json`. That kept sidecar is what lets the VOD
+    stay on the browse list as an undownloaded row (see fetcher.cached_vods) —
+    it can be re-downloaded rather than vanishing. Returns the paths actually
+    removed (the .watched.json may not exist). Raises FileNotFoundError if the
+    VOD isn't downloaded, ValueError if its id is ambiguous across streamers —
+    both via find_log.
     """
     _streamer, log_path = analyzer.find_log(vod_id, config.chat_dir)
     streamer_dir = log_path.parent
     candidates = [
         log_path,
-        streamer_dir / f"{vod_id}.meta.json",
         streamer_dir / f"{vod_id}.watched.json",
     ]
     removed = []
