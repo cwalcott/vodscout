@@ -30,14 +30,22 @@ def _watched_path(vod_id: str, chat_dir: Path) -> Path:
 
 
 def _merge_ranges(ranges: list[WatchedRange]) -> list[WatchedRange]:
-    """Sort by start, then merge overlapping/adjacent ranges.
+    """Drop empty ranges, sort by start, then merge overlapping/adjacent ones.
+
+    Ranges are half-open [start, end), so a zero-length range covers no time:
+    it can never mark a moment watched and adds nothing to the total. Dropping
+    it here keeps every range the rest of the tool sees re-expressible by
+    parse_range, which rejects end <= start.
 
     A merged span is "manual" if any of its inputs were manual — manual is
     the trustworthy source of truth, so it wins over chat-inferred.
     """
-    if not ranges:
+    ordered = sorted(
+        (r for r in ranges if r.end_seconds > r.start_seconds),
+        key=lambda r: r.start_seconds,
+    )
+    if not ordered:
         return []
-    ordered = sorted(ranges, key=lambda r: r.start_seconds)
     merged = [
         WatchedRange(
             ordered[0].start_seconds, ordered[0].end_seconds, ordered[0].source
@@ -55,15 +63,21 @@ def _merge_ranges(ranges: list[WatchedRange]) -> list[WatchedRange]:
 
 
 def load(vod_id: str, chat_dir: Path) -> WatchedRanges:
-    """Load watched ranges for a VOD. Missing file -> empty (not an error)."""
+    """Load watched ranges for a VOD. Missing file -> empty (not an error).
+
+    Normalizes on read as well as on write, so a file written before empty
+    ranges were dropped doesn't hand the editor a line it can't re-parse.
+    """
     path = _watched_path(vod_id, chat_dir)
     if not path.exists():
         return WatchedRanges(ranges=[], last_updated="")
     data = json.loads(path.read_text())
-    ranges = [
-        WatchedRange(r["start_seconds"], r["end_seconds"], r["source"])
-        for r in data.get("ranges", [])
-    ]
+    ranges = _merge_ranges(
+        [
+            WatchedRange(r["start_seconds"], r["end_seconds"], r["source"])
+            for r in data.get("ranges", [])
+        ]
+    )
     return WatchedRanges(ranges=ranges, last_updated=data.get("last_updated", ""))
 
 
@@ -195,4 +209,8 @@ def infer_from_chat(
     # single cluster, ranges[0] is ranges[-1], so it gets both.)
     ranges[0].start_seconds = max(0, ranges[0].start_seconds - EDGE_PAD_SECONDS)
     ranges[-1].end_seconds += EDGE_PAD_SECONDS
-    return ranges
+    # An interior cluster of one message spans a single instant, and an unpadded
+    # instant covers no time. Drop those rather than suggest a range that save()
+    # would discard anyway. (The outermost clusters are padded above, so a lone
+    # message at either end still yields a real window.)
+    return [r for r in ranges if r.end_seconds > r.start_seconds]

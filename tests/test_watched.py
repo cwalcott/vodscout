@@ -102,6 +102,34 @@ def test_clear_no_file_returns_false(chat_dir):
     assert watched.clear("12345", chat_dir) is False
 
 
+def test_empty_ranges_are_dropped(chat_dir):
+    # Half-open [start, end): a zero-length range covers nothing, and parse_range
+    # can't re-express it, so it never reaches disk.
+    w = WatchedRanges(
+        ranges=[WatchedRange(750, 750, "chat-inferred"), WatchedRange(0, 100, "manual")],
+        last_updated="",
+    )
+    watched.save(w, "12345", chat_dir)
+    assert watched.load("12345", chat_dir).ranges == [WatchedRange(0, 100, "manual")]
+
+
+def test_load_drops_empty_ranges_written_by_an_older_version(chat_dir):
+    # A .watched.json from before empty ranges were dropped must not hand the
+    # editor a `0:12:34-0:12:34` line that parse_range then rejects.
+    (chat_dir / "shroud" / "12345.watched.json").write_text(
+        json.dumps(
+            {
+                "ranges": [
+                    {"start_seconds": 0, "end_seconds": 100, "source": "manual"},
+                    {"start_seconds": 754, "end_seconds": 754, "source": "chat-inferred"},
+                ],
+                "last_updated": "2026-07-01T00:00:00+00:00",
+            }
+        )
+    )
+    assert watched.load("12345", chat_dir).ranges == [WatchedRange(0, 100, "manual")]
+
+
 def test_manual_wins_when_merging_mixed_sources(chat_dir):
     w = WatchedRanges(
         ranges=[
@@ -236,6 +264,35 @@ def test_infer_clusters_split_on_gap(chat_dir):
     assert ranges[1] == WatchedRange(
         900, 1000 + watched.EDGE_PAD_SECONDS, "chat-inferred"
     )
+
+
+def test_infer_drops_interior_single_message_cluster(chat_dir):
+    # A lone message between two real breaks spans one instant. It gets no edge
+    # pad (that's outermost-only), so it covers no time — don't suggest it.
+    _write_log(
+        chat_dir,
+        [(0, "me"), (60, "me"), (2000, "me"), (4000, "me"), (4060, "me")],
+    )
+    ranges = watched.infer_from_chat("12345", "me", chat_dir, gap_threshold_seconds=600)
+    assert ranges == [
+        WatchedRange(0, 60, "chat-inferred"),
+        WatchedRange(4000, 4060 + watched.EDGE_PAD_SECONDS, "chat-inferred"),
+    ]
+
+
+def test_infer_interior_cluster_at_one_timestamp_is_dropped(chat_dir):
+    # Several messages sharing one second are just as degenerate as one message.
+    _write_log(
+        chat_dir,
+        [(0, "me"), (60, "me"), (2000, "me"), (2000, "me"), (4000, "me")],
+    )
+    ranges = watched.infer_from_chat("12345", "me", chat_dir, gap_threshold_seconds=600)
+    # The 2000 cluster is interior and instantaneous → dropped. The 4000 cluster
+    # is outermost, so the trailing pad alone gives it width.
+    assert [(r.start_seconds, r.end_seconds) for r in ranges] == [
+        (0, 60),
+        (4000, 4000 + watched.EDGE_PAD_SECONDS),
+    ]
 
 
 def test_infer_short_gap_is_bridged(chat_dir):

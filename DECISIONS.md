@@ -15,6 +15,32 @@ Format:
 
 ---
 
+## 2026-07-10 — empty watched ranges are dropped, not made editable
+
+- **Bug:** `infer_from_chat` could emit a zero-length range (e.g. `0:12:34-0:12:34`)
+  for an *interior* cluster of a single message — `EDGE_PAD_SECONDS` only widens the
+  outermost clusters, so a lone message between two real breaks spans one instant.
+  The TUI/CLI editors then refused to re-parse the very line they'd just rendered
+  (`parse_range` rejects `end <= start`), so a VOD could reach a state where its
+  ranges couldn't be edited at all.
+- **Fixed the producer, not the validator.** Considered just letting `parse_range`
+  accept `start == end`; rejected. Ranges are half-open `[start, end)`, so a
+  zero-length range is *provably* inert: `mark_watched`'s `start <= t < end` never
+  matches it and it adds 0 to every total. Allowing it would make a value that can
+  never do anything more representable, not less. `parse_range` still errors on it.
+- Empty ranges are now filtered in `_merge_ranges` — the single normalization point,
+  so it covers infer, moment-marking, and `add_ranges` alike. `load` normalizes too
+  (not just `save`), so `.watched.json` files written before this heal on read rather
+  than staying uneditable until the next save. `infer_from_chat` also drops them
+  itself, so `--infer`'s confirm preview matches what actually gets saved.
+- Considered and deferred: giving interior singleton clusters a minimum width, by the
+  same logic as `EDGE_PAD_SECONDS` (chat lags; you watched *around* the message you
+  sent). Rejected for now — it reopens the 2026-06-21 "a break stays fully unwatched"
+  decision and needs clamping so two neighbors can't bridge a real break. Dropping
+  matches the current model: interior boundaries sit on messages, one message is a
+  point, a point covers no time. Revisit if a lone message turns out to be signal
+  worth keeping.
+
 ## 2026-07-09 — `delete` keeps metadata; wired into the TUI (`x`)
 
 - **`delete` now keeps `.meta.json`.** `actions.delete_vod` used to remove all
