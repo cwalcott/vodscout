@@ -174,9 +174,14 @@ def _iter_messages(
         edges = comments.get("edges") or []
 
         if not edges:
+            if comments.get("pageInfo", {}).get("hasNextPage") is False:
+                break  # An explicitly terminal empty page is a normal end.
             null_streak += 1
             if null_streak >= 3:
-                break
+                raise ValueError(
+                    f"Incomplete chat download for VOD {vod_id!r}: Twitch returned "
+                    "three empty pages without confirming the end. Please retry."
+                )
             time.sleep(0.5 * null_streak)
             continue
 

@@ -258,3 +258,73 @@ def test_downloaded_ids(tmp_path):
     (streamer_dir / "222.txt").write_text("")
     (streamer_dir / "222.watched.json").write_text("{}")  # not a .txt log
     assert downloaded_ids("shroud", config) == {"111", "222"}
+
+
+def _chat_page(timestamp=None, page_info=None):
+    edges = []
+    if timestamp is not None:
+        edges.append(
+            {
+                "cursor": str(timestamp),
+                "node": {
+                    "contentOffsetSeconds": timestamp,
+                    "commenter": {"login": "viewer"},
+                    "message": {"fragments": [{"text": "hello"}]},
+                },
+            }
+        )
+    return {"video": {"comments": {"edges": edges, "pageInfo": page_info or {}}}}
+
+
+@pytest.mark.parametrize("page_info", [{"hasNextPage": True}, {}])
+def test_incomplete_pagination_discards_partial_download(
+    tmp_path, monkeypatch, page_info
+):
+    monkeypatch.setattr(
+        fetcher, "_video_metadata", lambda _: {"owner": {"login": "shroud"}}
+    )
+    monkeypatch.setattr(fetcher.time, "sleep", lambda _: None)
+    pages = iter(
+        [_chat_page(10, {"hasNextPage": True})] + [_chat_page(page_info=page_info)] * 3
+    )
+    monkeypatch.setattr(fetcher, "_gql_post", lambda *_: next(pages))
+
+    with pytest.raises(ValueError, match="Incomplete chat download.*Please retry"):
+        fetcher.fetch_by_url("123", Config(tmp_path), on_progress=lambda *_: None)
+
+    assert not (tmp_path / "shroud" / "123.txt").exists()
+    assert not (tmp_path / "shroud" / "123.tmp").exists()
+    assert not (tmp_path / "shroud" / "123.meta.json").exists()
+
+
+def test_pagination_recovers_from_empty_pages_at_same_cursor(monkeypatch):
+    monkeypatch.setattr(fetcher.time, "sleep", lambda _: None)
+    pages = iter(
+        [
+            _chat_page(10, {"hasNextPage": True}),
+            _chat_page(page_info={"hasNextPage": True}),
+            _chat_page(page_info={"hasNextPage": True}),
+            _chat_page(20, {"hasNextPage": False}),
+        ]
+    )
+    variables = []
+
+    def gql_post(session, payload):
+        variables.append(payload["variables"])
+        return next(pages)
+
+    monkeypatch.setattr(fetcher, "_gql_post", gql_post)
+    assert [m["time"] for m in fetcher._iter_messages(None, "123")] == [10, 20]
+    assert [v.get("cursor") for v in variables] == [None, "10", "10", "10"]
+
+
+@pytest.mark.parametrize("has_messages", [False, True])
+def test_explicit_terminal_empty_page_ends_pagination(monkeypatch, has_messages):
+    pages = iter(
+        ([_chat_page(10, {"hasNextPage": True})] if has_messages else [])
+        + [_chat_page(page_info={"hasNextPage": False})]
+    )
+    monkeypatch.setattr(fetcher, "_gql_post", lambda *_: next(pages))
+    assert [m["time"] for m in fetcher._iter_messages(None, "123")] == (
+        [10] if has_messages else []
+    )

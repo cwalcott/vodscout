@@ -15,6 +15,14 @@ Format:
 
 ---
 
+## 2026-09-12 — incomplete chat pagination fails instead of saving partial logs
+
+- Empty chat pages end pagination only when `hasNextPage` is explicitly false.
+  Otherwise retry the same cursor, keeping the existing three-attempt limit;
+  exhaustion now raises an actionable error so the download cleanup removes the
+  partial log and leaves the VOD available to retry. Regression tests cover
+  cleanup, missing pagination information, recovery, and terminal empty pages.
+
 ## 2026-07-10 — empty watched ranges are dropped, not made editable
 
 - **Bug:** `infer_from_chat` could emit a zero-length range (e.g. `0:12:34-0:12:34`)
