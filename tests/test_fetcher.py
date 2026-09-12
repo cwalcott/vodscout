@@ -8,10 +8,8 @@ from vodscout.fetcher import (
     _scan_third_party,
     _vod_id_from_url,
     cached_vods,
-    downloaded_ids,
     parse_selection,
     remove_cached_meta,
-    undownloaded_vods,
     write_remote_meta,
 )
 
@@ -88,28 +86,6 @@ def test_parse_selection_invalid(text, count):
 )
 def test_scan_third_party(text, known, expected):
     assert _scan_third_party(text, known) == expected
-
-
-def _vod(vid):
-    return {"id": vid, "title": "t", "created_at": "2026-06-20T00:00:00Z"}
-
-
-def test_undownloaded_vods_filters_existing(tmp_path):
-    config = Config(chat_dir=tmp_path)
-    streamer_dir = tmp_path / "shroud"
-    streamer_dir.mkdir()
-    (streamer_dir / "111.txt").write_text("")  # already downloaded
-
-    videos = [_vod("111"), _vod("222"), _vod("333")]
-    result = undownloaded_vods(videos, "shroud", config)
-    assert [v["id"] for v in result] == ["222", "333"]
-
-
-def test_undownloaded_vods_no_local_dir(tmp_path):
-    config = Config(chat_dir=tmp_path)
-    videos = [_vod("111"), _vod("222")]
-    result = undownloaded_vods(videos, "shroud", config)
-    assert [v["id"] for v in result] == ["111", "222"]
 
 
 def _remote_row(vid):
@@ -246,18 +222,6 @@ def test_fetch_by_url_no_messages_writes_nothing(tmp_path, monkeypatch):
     # The tmp file is cleaned up and no log is left behind.
     assert not (tmp_path / "shroud" / "123.txt").exists()
     assert not (tmp_path / "shroud" / "123.tmp").exists()
-
-
-def test_downloaded_ids(tmp_path):
-    config = Config(chat_dir=tmp_path)
-    assert downloaded_ids("shroud", config) == set()  # no dir yet
-
-    streamer_dir = tmp_path / "shroud"
-    streamer_dir.mkdir()
-    (streamer_dir / "111.txt").write_text("")
-    (streamer_dir / "222.txt").write_text("")
-    (streamer_dir / "222.watched.json").write_text("{}")  # not a .txt log
-    assert downloaded_ids("shroud", config) == {"111", "222"}
 
 
 def _chat_page(timestamp=None, page_info=None):

@@ -15,6 +15,47 @@ Format:
 
 ---
 
+## 2026-09-12 — remove unused implementation leftovers
+
+- Remove the frequency API's unused minimum/start/end options after dropping
+  those TUI controls. Keep watched exclusions and full 10-second windows.
+- Remove the legacy Moment run-span fields (only the replaced TUI consumed them)
+  and the unused downloaded_ids/undownloaded_vods fetcher helpers plus their tests.
+- Retain baseline detection and its settings: CLI `analyze` still calls them.
+  Removing that path would change an existing command rather than clean dead code.
+
+## 2026-09-12 — playback context and faster frequency tests
+
+- TUI and CLI result links start five seconds before the result, clamped to zero;
+  displayed timestamps and marked watched intervals remain the actual result.
+- Keep one compact Textual keyboard smoke test rather than replaying the same
+  flow at two sizes. Invoke synchronous actions directly for filter/sort/mark
+  coverage; matching and watched-exclusion semantics retain fast unit tests.
+
+## 2026-09-12 — simplify frequency view around emote selection
+
+- Make the emote list the initial focus; hide optional partial text search behind
+  `/`. Selecting an emote matches its full name case-insensitively (metadata or
+  whitespace token), so `OOOO` excludes `LMAOOOOOOO`; repeated uses still count
+  once per message. Free-text search retains substring matching.
+- Remove minimum and From/Until controls from the TUI. Show all nonempty matching
+  10-second windows, initially highest count first; keep time sorting and
+  All/Unwatched. Underlying API bounds/minimum remain available.
+
+## 2026-09-12 — TUI returns to chat-frequency search
+
+- Replace the TUI baseline-spike view with literal case-insensitive substring
+  search: count matching messages once per fixed 10 seconds, minimum 10 editable,
+  time/count sorting, saved-emote shortcuts, and a Busiest chat mode. CLI spike
+  analysis remains available during this trial.
+- Search bounds use H:MM[:SS], exclusive Until; Unwatched excludes messages before
+  counting so partial watched buckets cannot contribute hidden messages. Marking
+  a result records only its bounded 10-second window. Files and sync stay unchanged.
+- `/` focuses search; Ctrl+F opens favorite discovery; `s` toggles sorting; `o`
+  opens Busiest chat. Enter applies inputs. Escape leaves inputs before going back.
+- Validated on VOD 2871418211: Orange after 0:54 yields four results (25 at 2:44),
+  Sogre yields four, and lmaooo after 0:54 at minimum 50 yields nine (All mode).
+
 ## 2026-09-12 — Twitch list refresh runs off the UI thread
 
 - TUI `r` fetches remote VODs in a thread worker, keeping existing rows usable

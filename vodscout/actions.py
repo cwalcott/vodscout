@@ -113,3 +113,31 @@ def delete_vod(vod_id: str, config: "cfg.Config") -> list[Path]:
             path.unlink()
             removed.append(path)
     return removed
+
+
+def search(
+    vod_id: str,
+    config: "cfg.Config",
+    query: str | None,
+    *,
+    exact_emote: bool = False,
+    include_watched: bool = False,
+) -> list[analyzer.FrequencyWindow]:
+    """Search message text (None = all chat), using saved watched exclusions."""
+    _, path = analyzer.find_log(vod_id, config.chat_dir)
+    ranges = watched.load(vod_id, config.chat_dir).ranges
+    windows = analyzer.frequency_windows(
+        analyzer.load_messages(path),
+        query,
+        exact_emote=exact_emote,
+        excluded_ranges=[]
+        if include_watched
+        else [(r.start_seconds, r.end_seconds) for r in ranges],
+    )
+    for window in windows:
+        window.watched = any(
+            r.start_seconds <= window.start_seconds
+            and window.end_seconds <= r.end_seconds
+            for r in ranges
+        )
+    return windows

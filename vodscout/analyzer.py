@@ -1,5 +1,6 @@
 import json
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -16,11 +17,6 @@ class Moment:
     timestamp_seconds: int
     magnitude: float
     watched: bool = False
-    # The spike's full run window [start, end) in seconds — the whole stretch
-    # of elevated buckets, not just the peak. This is the honest span of "the
-    # moment", used when marking one watched.
-    start_seconds: int = 0
-    end_seconds: int = 0
     # Overall view: top emotes used in the spike window, as (name, count).
     top_emotes: list[tuple[str, int]] = field(default_factory=list)
     # Per-emote view: raw uses of the chosen emote in the peak bucket.
@@ -147,8 +143,6 @@ def detect_spikes(
             Moment(
                 timestamp_seconds=run.peak * bucket_seconds,
                 magnitude=round(run.magnitude, 2),
-                start_seconds=run.start * bucket_seconds,
-                end_seconds=run.end * bucket_seconds,
                 top_emotes=Counter(window).most_common(top_emotes),
             )
         )
@@ -184,8 +178,6 @@ def detect_emote_spikes(
             Moment(
                 timestamp_seconds=run.peak * bucket_seconds,
                 magnitude=round(run.magnitude, 2),
-                start_seconds=run.start * bucket_seconds,
-                end_seconds=run.end * bucket_seconds,
                 count=int(counts[run.peak]),
             )
         )
@@ -250,7 +242,57 @@ def _format_timestamp(seconds: int) -> str:
 
 
 def _vod_link(vod_id: str, seconds: int) -> str:
+    """Open five seconds before a result to include the reaction's context."""
+    seconds = max(0, seconds - 5)
     h = seconds // 3600
     m = (seconds % 3600) // 60
     s = seconds % 60
     return f"https://www.twitch.tv/videos/{vod_id}?t={h}h{m:02d}m{s:02d}s"
+
+
+@dataclass
+class FrequencyWindow:
+    timestamp_seconds: int
+    start_seconds: int
+    end_seconds: int
+    count: int
+    watched: bool = False
+
+
+def frequency_windows(
+    messages: list[dict],
+    query: str | None,
+    *,
+    exact_emote: bool = False,
+    excluded_ranges: Sequence[tuple[int, int]] = (),
+) -> list[FrequencyWindow]:
+    """Count matching messages in fixed 10s buckets, in chronological order.
+
+    None searches all chat; empty text returns no results. Watched exclusions
+    apply to individual messages before counting. Search is a literal
+    case-insensitive substring unless exact_emote selects whole emote names
+    via metadata or whitespace tokens. Repetitions count once.
+    """
+    needle = query.casefold().strip() if query is not None else None
+    if needle == "":
+        return []
+    counts: Counter = Counter()
+    for message in messages:
+        t = message["time"]
+        if any(a <= t < b for a, b in excluded_ranges):
+            continue
+        text = message.get("msg", "").casefold()
+        if needle is None:
+            matched = True
+        elif exact_emote:
+            # Metadata handles native emote fragments; tokens also work for
+            # old logs and third-party emotes absent from provider metadata.
+            names = message.get("emotes") or ()
+            matched = needle in text.split() or any(
+                needle == name.casefold() for name in names
+            )
+        else:
+            matched = needle in text
+        if matched:
+            counts[t // 10 * 10] += 1
+    return [FrequencyWindow(t, t, t + 10, count) for t, count in sorted(counts.items())]

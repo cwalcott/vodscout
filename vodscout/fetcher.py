@@ -500,20 +500,6 @@ def cached_vods(streamer: str, config: Config) -> list[dict]:
     return vods
 
 
-def downloaded_ids(streamer: str, config: Config) -> set[str]:
-    """VOD IDs already on disk for a streamer (empty if the dir doesn't exist)."""
-    streamer_dir = config.chat_dir / streamer
-    if not streamer_dir.is_dir():
-        return set()
-    return {p.stem for p in streamer_dir.glob("*.txt")}
-
-
-def undownloaded_vods(videos: list[dict], streamer: str, config: Config) -> list[dict]:
-    """Filter `videos` to those whose chat log isn't already on disk."""
-    have = downloaded_ids(streamer, config)
-    return [v for v in videos if v["id"] not in have]
-
-
 def parse_selection(text: str, count: int) -> list[int]:
     """Parse a numbered-pick string into sorted 0-based indices.
 

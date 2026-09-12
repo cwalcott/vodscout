@@ -6,15 +6,11 @@ so the rest of the package carries no interactive-UI dependency.
 
 Flow: a VOD *list* screen (downloads + recent VODs cached from the last refresh;
 `r` refreshes from Twitch, `d` downloads the highlighted VOD); selecting a
-*downloaded* VOD pushes a full *VOD window* with top moments (left) and emotes
-(right) side by side, a `w` All/Unwatched toggle that drives the moment list, and
-`f` to favorite the highlighted emote (pinned first) — or `/` to search-and-favorite
-via a type-to-filter picker over the VOD's emotes. All wired to the real legs:
-list/moments/emotes, the
-`<streamer>/favorites.json` favorites sidecar, and watched tracking — auto-inferred
-from your chat on first open of a VOD, with `e` to edit the ranges inline and `i`
-to re-infer. An undownloaded VOD has no window to open, so selecting one instead
-asks to confirm a download (or `d` grabs the highlighted row without the prompt).
+*downloaded* VOD opens a text-frequency search with saved-emote shortcuts,
+10-second counts, sorting, and All/Unwatched filtering. Selecting an emote
+matches its full name; `/` reveals optional partial text search.
+The same screen edits and infers watched ranges. An undownloaded VOD instead
+asks to confirm a download (or `d` downloads without opening the window).
 The fetch runs as a background worker on the (always-mounted) list screen, so it
 doesn't block — you keep browsing while it downloads, the row shows a spinner and
 a live progress bar (how far the fetched chat has reached through the VOD), and
@@ -41,6 +37,7 @@ from textual.containers import Horizontal, Vertical
 from textual.coordinate import Coordinate
 from textual.screen import ModalScreen, Screen
 from textual.widgets import (
+    Button,
     DataTable,
     Footer,
     Header,
@@ -584,7 +581,7 @@ class VodListScreen(Screen):
 
 
 class VodScreen(Screen):
-    """One VOD: top moments (left) + emotes (right), with an All/Unwatched mode."""
+    """One VOD: text frequency search, saved emotes, and watched tracking."""
 
     BINDINGS = [
         ("escape", "back", "Back"),
@@ -593,8 +590,10 @@ class VodScreen(Screen):
         ("e", "edit", "Edit watched"),
         ("i", "infer", "Infer watched"),
         ("f", "favorite", "★ emote"),
-        ("/", "favorite_search", "★ search"),
-        ("o", "overall", "Overall"),
+        ("/", "search_focus", "Search"),
+        ("ctrl+f", "favorite_search", "Find favorite"),
+        ("s", "sort", "Sort"),
+        ("o", "overall", "Busiest chat"),
         ("x", "delete", "Delete chat"),
         ("q", "app.quit", "Quit"),
     ]
@@ -603,9 +602,13 @@ class VodScreen(Screen):
         super().__init__()
         self.vod = vod
         self.show_all = False  # Unwatched is the default view
-        self.current_emote: str | None = None  # None = overall chat-volume view
+        self.current_emote: str | None = ""  # None = busiest chat; empty = search
+        self.exact_emote = False
+        self.sort_by_count = True
         self.favorites: set[str] = set()  # loaded from the sidecar in on_mount
-        self._raw_moments: list[an.Moment] = []  # all moments (watched-flagged)
+        self._raw_moments: list[
+            an.FrequencyWindow
+        ] = []  # all moments (watched-flagged)
         self._emote_counts: Counter = Counter()
 
     @property
@@ -615,16 +618,23 @@ class VodScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="vodheader")
+        with Horizontal(id="searchbar"):
+            yield Input(placeholder="Search text / partial emote", id="searchquery")
+            yield Button("Search", id="runsearch")
+        with Horizontal(id="searchoptions"):
+            yield Button("Count ↓", id="sortsearch")
+            yield Button("Unwatched", id="searchscope")
+            yield Button("Busiest chat", id="busychat")
         with Horizontal(id="panes"):
             yield DataTable(id="moments", cursor_type="row", zebra_stripes=True)
             yield DataTable(id="emotes", cursor_type="row", zebra_stripes=True)
         yield Footer()
 
     def on_mount(self) -> None:
-        self.query_one("#moments", DataTable).border_title = "Top moments"
+        self.query_one("#moments", DataTable).border_title = "Search results"
         self.query_one(
             "#emotes", DataTable
-        ).border_title = "Emotes  (f: ★ · /: search · tab: focus)"
+        ).border_title = "Emotes (Enter: search · f: ★)"
         self.favorites = fav.load(self._streamer, self.app.config.chat_dir)
         self._auto_infer()
         self._refresh_header()
@@ -632,23 +642,20 @@ class VodScreen(Screen):
         self._load_emotes()
         self._populate_moments()
         self._populate_emotes()
+        self.query_one("#emotes", DataTable).focus()
 
     # --- data loading (the real leg calls) -------------------------------
 
     def _load_moments(self) -> None:
-        """Fetch all moments for the current view (overall or current_emote),
-        watched-flagged; the All/Unwatched filter is applied at render time."""
+        """Re-read saved watched ranges whenever the search is applied."""
         try:
-            result = actions.analyze(
+            self._raw_moments = actions.search(
                 self.vod["id"],
                 self.app.config,
-                emote=self.current_emote,
-                include_watched=True,
+                self.current_emote,
+                exact_emote=self.exact_emote,
+                include_watched=self.show_all,
             )
-            self._raw_moments = result.moments
-        except actions.EmoteNotFound:
-            self._raw_moments = []
-            self.notify(f"No {self.current_emote!r} spikes here.", severity="warning")
         except (FileNotFoundError, ValueError) as e:
             self._raw_moments = []
             self.notify(str(e), severity="error")
@@ -686,7 +693,10 @@ class VodScreen(Screen):
         cov = _coverage_bar(v.get("watched_seconds", 0), v["duration_seconds"]).strip()
         mode = "All" if self.show_all else "Unwatched"
         showing = (
-            f"{self.current_emote} spikes" if self.current_emote else "chat volume"
+            "Busiest chat"
+            if self.current_emote is None
+            else f"{'Emote' if self.exact_emote else 'Search'}: "
+            f"{self.current_emote or 'choose an emote · / for text search'}"
         )
         self.query_one("#vodheader", Static).update(
             f"[b]{v['title'] or '(no title)'}[/b]\n"
@@ -694,41 +704,39 @@ class VodScreen(Screen):
             f"mode: [b]{mode}[/b]  (w toggles)     showing: [b]{showing}[/b]"
         )
 
-    def _visible(self, moments: list[an.Moment]) -> list[an.Moment]:
-        ordered = sorted(moments, key=lambda m: m.magnitude, reverse=True)
-        if self.show_all:
-            return ordered
-        return [m for m in ordered if not m.watched]
+    def _visible(self, moments: list[an.FrequencyWindow]) -> list[an.FrequencyWindow]:
+        if self.sort_by_count:
+            return sorted(moments, key=lambda m: (-m.count, m.timestamp_seconds))
+        return sorted(moments, key=lambda m: m.timestamp_seconds)
 
     def _populate_moments(self) -> None:
         table = self.query_one("#moments", DataTable)
         table.clear(columns=True)
-        per_emote = self.current_emote is not None
-        table.add_columns("#", "time", "mag", "uses" if per_emote else "top emotes")
-
+        table.add_columns("time", "messages", "watched")
         moments = self._visible(self._raw_moments)
+        table.border_title = f"{len(moments)} results · 10-second windows"
         if not moments:
-            table.add_row("", "—", "", "[dim](nothing in this view)[/dim]")
+            table.add_row("—", "", "")
             return
-        for i, m in enumerate(moments, 1):
+        for m in moments:
             ts = an._format_timestamp(m.timestamp_seconds)
-            mag = f"{m.magnitude:.1f}×"
-            if per_emote:
-                detail = f"{m.count} uses"
-            else:
-                detail = (
-                    "  ".join(f"{e} [dim]({n})[/dim]" for e, n in m.top_emotes)
-                    or "[dim]—[/dim]"
-                )
-            if self.show_all and m.watched:
-                detail += "  [dim]\\[watched][/dim]"
-            table.add_row(str(i), ts, mag, detail, key=str(m.timestamp_seconds))
+            table.add_row(
+                ts,
+                str(m.count),
+                "yes" if m.watched else "",
+                key=str(m.timestamp_seconds),
+            )
 
     def _populate_emotes(self) -> None:
         table = self.query_one("#emotes", DataTable)
         table.clear(columns=True)
         table.add_columns("emote", "uses")
         items = self._emote_counts.most_common()
+        items += [
+            (name, 0)
+            for name in sorted(self.favorites)
+            if name not in self._emote_counts
+        ]
         if not items:
             table.add_row("[dim](no emotes)[/dim]", "")
             return
@@ -741,39 +749,72 @@ class VodScreen(Screen):
     # --- actions ---------------------------------------------------------
 
     def action_back(self) -> None:
-        """Esc backs out one level at a time: drilling into an emote changes the
-        moments pane in place, so Esc first undoes that (back to the overall
-        view, same as `o`) and only pops to the VOD list from overall."""
-        if self.current_emote is not None:
-            self.action_overall()
+        if isinstance(self.focused, Input):
+            self.query_one("#searchbar").display = False
+            self.query_one("#emotes", DataTable).focus()
         else:
             self.app.pop_screen()
 
+    def action_search_focus(self) -> None:
+        self.query_one("#searchbar").display = True
+        self.query_one("#searchquery", Input).focus()
+
+    def action_sort(self) -> None:
+        self.sort_by_count = not self.sort_by_count
+        self.query_one("#sortsearch", Button).label = (
+            "Count ↓" if self.sort_by_count else "Time ↓"
+        )
+        self._populate_moments()
+
     def action_toggle_mode(self) -> None:
         self.show_all = not self.show_all
+        self.query_one("#searchscope", Button).label = (
+            "All" if self.show_all else "Unwatched"
+        )
+        self._load_moments()
         self._refresh_header()
         self._populate_moments()
 
+    def _apply_search(self, *, busiest: bool = False, emote: str | None = None) -> None:
+        self.exact_emote = emote is not None
+        self.current_emote = (
+            None
+            if busiest
+            else emote
+            if emote is not None
+            else self.query_one("#searchquery", Input).value.strip()
+        )
+        self._load_moments()
+        self._refresh_header()
+        self._populate_moments()
+        self.query_one("#searchbar").display = False
+        self.query_one("#moments", DataTable).focus()
+
     def action_overall(self) -> None:
-        if self.current_emote is not None:
-            self.current_emote = None
-            self._load_moments()
-            self._refresh_header()
-            self._populate_moments()
+        self.sort_by_count = True
+        self.query_one("#sortsearch", Button).label = "Count ↓"
+        self._apply_search(busiest=True)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self._apply_search()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        handlers = {
+            "runsearch": self._apply_search,
+            "busychat": self.action_overall,
+            "sortsearch": self.action_sort,
+            "searchscope": self.action_toggle_mode,
+        }
+        if event.button.id in handlers:
+            handlers[event.button.id]()
 
     def action_mark_watched(self) -> None:
-        """Mark the highlighted moment's spike window as watched (`m`).
-
-        Records the moment's full run window (the stretch of elevated buckets,
-        not just the peak) as a watched range with source "moment". Because
-        watched filtering is keyed on time, this suppresses the same period in
-        every view — overall and each emote's spikes — so a checked moment
-        stops resurfacing under different emotes. Undo by removing the range
-        in the `e` editor.
-        """
+        """Mark the selected result's 10-second window watched."""
         table = self.query_one("#moments", DataTable)
         if not table.has_focus:
-            self.notify("Tab to the Moments pane first, then m to mark.")
+            self.notify("Tab to the results pane first, then m to mark.")
             return
         if table.row_count == 0:
             return
@@ -874,12 +915,12 @@ class VodScreen(Screen):
             return
         row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
         name = row_key.value
-        if name not in self._emote_counts:
+        if name not in self._emote_counts and name not in self.favorites:
             return  # the "(no emotes)" placeholder row
         self._toggle_favorite(name)
 
     def action_favorite_search(self) -> None:
-        """Open the search-to-favorite picker (`/`): type to filter this VOD's
+        """Open the search-to-favorite picker (Ctrl+F): type to filter this VOD's
         emotes, Enter favorites the highlighted match — handy when the emote is
         buried in a long pane. Works regardless of which pane has focus."""
         if not self._emote_counts:
@@ -918,15 +959,13 @@ class VodScreen(Screen):
                 self.notify(f"Opening {link}")
         elif event.data_table.id == "emotes":
             name = event.row_key.value
-            if name in self._emote_counts:
-                self.current_emote = name
-                self._load_moments()
-                self._refresh_header()
-                self._populate_moments()
+            if name in self._emote_counts or name in self.favorites:
+                self._apply_search(emote=name)
+                self.query_one("#moments", DataTable).focus()
 
 
 class FavoriteEmotePickerScreen(ModalScreen[str | None]):
-    """Search-to-favorite picker, opened with `/` from the VOD window.
+    """Search-to-favorite picker, opened with Ctrl+F from the VOD window.
 
     Type to filter the VOD's emotes live (case-insensitive substring); ↑↓ move
     the highlight, Enter favorites the highlighted emote, Esc cancels. Scoped to
@@ -1190,6 +1229,9 @@ class VodscoutApp(App):
     #vodlist { height: 1fr; }
 
     #vodheader { height: auto; padding: 1 2; background: $panel; }
+    #searchbar, #searchoptions { height: 3; }
+    #searchbar { display: none; }
+    #searchquery { width: 1fr; }
     #panes { height: 1fr; }
     #moments { width: 2fr; border: round $primary; }
     #emotes { width: 1fr; border: round $primary; }

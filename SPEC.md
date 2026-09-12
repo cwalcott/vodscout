@@ -142,6 +142,34 @@ works. A missing file means no watched state has been recorded yet.
 of "interesting moments," ranked, ideally biased toward unwatched parts
 of the VOD.
 
+### TUI frequency search (2026-09-12)
+
+The VOD screen opens with the emote list focused, favorites first. Selecting
+an emote matches its full name case-insensitively, using emote metadata or exact
+whitespace tokens for logs with missing provider metadata. Each message counts
+once, even with repeated emotes. `OOOO` cannot match `LMAOOOOOOO`.
+
+Results count messages in fixed 10-second buckets, initially highest count first
+(ties chronological). Every nonempty matching bucket is shown: no minimum,
+From/Until fields, baseline, merging, or top-N cutoff. Time/count ordering is
+toggleable. Busiest chat counts all messages and initially sorts by count.
+`/` reveals a small optional literal substring search; Enter applies and hides
+it, Escape hides it and returns focus to emotes. The frequency API also returns
+all nonempty windows; it has no unused minimum or time-bound options.
+
+Unwatched is initially selected and excludes individual watched messages before
+counting. All bypasses exclusions; a fully covered result is labeled watched.
+`m` marks the result's 10-second window. Enter opens a link five seconds before
+the result (clamped to zero), providing context without changing the displayed
+time or watched interval. CLI result links use the same five-second lead-in.
+The existing on-disk layout and sync arrangements are preserved.
+
+The descriptions of baseline analysis and the old moments/emotes screen below
+are retained as history and for the unchanged CLI `analyze` path. The TUI uses
+`actions.search` and `analyzer.frequency_windows` instead of `actions.analyze`.
+
+### Legacy CLI spike analysis
+
 The core mechanic is shared: bucket messages into fixed time windows,
 compute a rolling baseline (trailing average over some window), and flag
 buckets exceeding it. This drives two distinct, separately-invoked

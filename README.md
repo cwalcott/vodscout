@@ -54,7 +54,7 @@ default_streamer = "..."           # streamer the bare `vodscout` opens to
 
 # Optional — detection thresholds (defaults shown):
 # [analysis]
-# bucket_seconds = 60              # chat-volume bucket size
+# bucket_seconds = 60              # legacy CLI spike bucket size
 # gap_threshold_seconds = 180      # silence that splits inferred watched sessions
 ```
 
@@ -62,7 +62,21 @@ default_streamer = "..."           # streamer the bare `vodscout` opens to
 
 Run `vodscout` with no command (or `vodscout browse <streamer>`) for a full-screen
 TUI. Arrow through a streamer's VODs — your downloads merged with their recent
-Twitch VODs — and drill into one to see top moments and top emotes side by side.
+Twitch VODs — and open one to choose an emote from the list (favorites first).
+Press Enter to see its matching messages in 10-second windows, highest count
+first. Emotes match their full names, ignoring case: `OOOO` does not include
+`LMAOOOOOOO`. Each message counts once even if it repeats the emote.
+
+There are no minimum or time-bound fields: every nonempty matching window is
+available. Toggle time/count sorting and All/Unwatched as needed. Unwatched
+excludes watched messages before counting. Busiest chat counts all messages.
+For occasional partial text searches, press `/`, type a query, and press Enter;
+the search field hides again after submission (or Escape). Text search is a
+literal, case-insensitive substring, not regex.
+
+Result links open five seconds before the displayed timestamp (or at the start
+of the VOD), giving context for the reaction. Marking watched still records the
+result window itself.
 
 | Key | Action |
 | --- | --- |
@@ -70,21 +84,25 @@ Twitch VODs — and drill into one to see top moments and top emotes side by sid
 | `r` | Refresh the VOD list from Twitch |
 | `d` | Download the highlighted VOD's chat (runs in the background) |
 | `Enter` | Open a downloaded VOD (or confirm a download for one that isn't) |
-| `w` | Toggle the moment list between All / Unwatched |
-| `m` | Mark the highlighted moment's spike window watched (undo via `e`) |
+| `w` | Toggle search between All / Unwatched |
+| `m` | Mark the selected 10-second result watched (undo via `e`) |
 | `f` | Favorite the highlighted emote (pins it to the top) |
-| `/` | Search the VOD's emotes to favorite one |
+| `/` | Reveal the optional partial text search |
+| `Ctrl+F` | Find an emote to favorite |
+| `s` | Toggle time/count sorting |
+| `o` | Busiest chat |
 | `e` | Edit watched ranges inline |
 | `i` | Re-infer watched ranges from your chat |
-| `Enter` (on a moment/emote) | Open its timestamped link / drill into the emote's own spikes |
-| `Esc` | Back (out of an emote's spike view first, then to the list) |
+| `Enter` (on a moment/emote) | Open its timestamped link / search the full emote name |
+| `Esc` | Leave a text field, then return to the VOD list |
 
 Downloads are non-blocking — keep browsing while a chat downloads; the row shows
 a live progress bar and flips to downloaded when it finishes.
 
 ## CLI
 
-The CLI is fully scriptable and covers the same ground:
+The CLI remains scriptable. Its `analyze` command retains the older baseline
+spike analysis; the new frequency search is currently in the TUI:
 
 ```bash
 # Browse a streamer's VODs (your downloads + recent Twitch VODs, merged)

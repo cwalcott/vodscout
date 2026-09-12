@@ -33,7 +33,8 @@ Read `SPEC.md` first for the full architecture and rationale. Read
   offline; a `.meta.json` without a `.txt` is an undownloaded cache entry),
   and `.watched.json` (watched ranges).
 - Detection thresholds (bucket size, gap threshold) are overridable via
-  config. Spike detection uses a top-N approach — no multiplier threshold;
+  config. The TUI uses fixed 10-second message-frequency results, exact emote
+  selection, optional partial text search, and time/count sorting. Legacy CLI spike detection uses a top-N approach — no multiplier threshold;
   see DECISIONS.md. `analyze` has two views: overall chat-volume moments
   (default) and `--emote <name>` for one emote. `top_n` and `--emote`
   (analyze) and `--gap` (watched --infer, overrides the gap threshold for
