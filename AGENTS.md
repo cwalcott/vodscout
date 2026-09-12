@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-Standing context for Claude Code sessions in this repo. Keep this thin —
+Standing context for coding sessions in this repo. Keep this thin —
 add a rule here only once you've had to repeat the same correction more
 than once. Architecture/design rationale belongs in `SPEC.md`, not here.
 
@@ -34,7 +34,8 @@ Read `SPEC.md` first for the full architecture and rationale. Read
   and `.watched.json` (watched ranges).
 - Detection thresholds (bucket size, gap threshold) are overridable via
   config. The TUI uses fixed 10-second message-frequency results, exact emote
-  selection, optional partial text search, and time/count sorting. Legacy CLI spike detection uses a top-N approach — no multiplier threshold;
+  selection, optional partial text search, and time/count sorting. Legacy CLI
+  spike detection uses a top-N approach — no multiplier threshold;
   see DECISIONS.md. `analyze` has two views: overall chat-volume moments
   (default) and `--emote <name>` for one emote. `top_n` and `--emote`
   (analyze) and `--gap` (watched --infer, overrides the gap threshold for
@@ -64,6 +65,6 @@ Read `SPEC.md` first for the full architecture and rationale. Read
 - When a real design decision gets made or reversed during a session
   (e.g. a threshold value, a UX detail), add a dated one-line entry to
   `DECISIONS.md` rather than letting it live only in chat history.
-- Before committing, check that `DECISIONS.md` and `CLAUDE.md` are up to
+- Before committing, check that `DECISIONS.md` and `AGENTS.md` are up to
   date. Commits are the right moment to flush any decisions made during the
   session.

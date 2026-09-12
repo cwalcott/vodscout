@@ -1,13 +1,9 @@
 # vodscout
 
-A CLI tool for Twitch VOD chat. It downloads a VOD's chat log, tracks which
-parts of the VOD you've already watched, and analyzes chat activity to surface
-interesting moments — biased toward the parts you *haven't* seen yet.
-
-Twitch VODs are long. Chat activity (volume spikes, bursts of a particular
-emote) is a decent proxy for "something happened here." Channel-level stats
-tools won't tell you where the good parts of *this* VOD are — this does, and it
-skips the moments you've already watched.
+A terminal tool for exploring Twitch VOD chat. Download a VOD's chat, keep track
+of the parts you've watched, and choose familiar emotes to find reactions worth
+checking out. Results show matching messages per 10 seconds, highest count first,
+with links into the VOD.
 
 No Twitch account, developer app, or credentials required. vodscout talks to the
 same public endpoint the web player uses.
@@ -23,9 +19,9 @@ Three independent pieces that share files on disk but not internal state:
   focus on the rest. Ranges are entered manually, or *inferred* from your own
   chat messages in the VOD (assistive — a suggestion you review, not ground
   truth).
-- **Analyzer** — buckets chat into time windows, finds where volume (or one
-  emote) spiked above its recent normal, and prints ranked moments with direct
-  timestamped VOD links.
+- **Analyzer** — counts messages matching an emote or text search in 10-second
+  windows, or shows the busiest chat windows. The TUI can exclude watched parts.
+  The CLI retains its older baseline-spike reports.
 
 ## Install
 
@@ -129,14 +125,16 @@ vodscout watched <vod-id> --infer                  # suggest ranges from your ch
 vodscout watched <vod-id> --edit                   # edit the ranges file in $EDITOR
 vodscout watched <vod-id> --clear                  # remove all ranges
 
-vodscout delete <vod-id>                  # delete a VOD's chat log + sidecars
+vodscout delete <vod-id>                  # delete chat + watched history; keep metadata
 ```
 
-The natural flow: `emotes` (what gets spammed here) → `analyze` (the hype
-moments) → `analyze --emote X` (when X specifically popped off).
+For the legacy CLI workflow, use `emotes` to find names, then `analyze` or
+`analyze --emote X` for baseline-spike reports.
 
 `--emote` matches forgivingly — case-insensitive and partial, so `lmaoo` finds
-`LMAOOOOOOOOOO`, picking the most-used match.
+`LMAOOOOOOOOOO`, picking the most-used match. Unlike the TUI, this report counts
+emote occurrences (including repeats) and filters watched moments by their peak
+timestamp.
 
 ## Files on disk
 
@@ -152,7 +150,9 @@ Everything lives under `chat_dir`, organized by streamer:
 ```
 
 These are plain files — your downloads are the source of truth and are never
-deleted by a refresh, even after a VOD ages off or is removed from Twitch.
+deleted by a refresh, even after a VOD ages off or is removed from Twitch. Set
+`chat_dir` to your synced folder to carry chat, favorites, and watched history
+across computers; vodscout does not run its own sync service.
 
 ## Notes
 
@@ -166,8 +166,9 @@ deleted by a refresh, even after a VOD ages off or is removed from Twitch.
   Service.
 - **Chat only.** vodscout never downloads video — it's chat logs and analysis,
   nothing else.
-- Watch-progress isn't something Twitch exposes, so watched tracking is
-  necessarily manual or inferred from your own chat — see above.
+- Watched tracking uses manual ranges and inference from your live chat activity.
+  Automatic playback tracking and reuse of an existing browser player are not
+  implemented.
 
 See [`SPEC.md`](SPEC.md) for the full architecture and rationale, and
 [`DECISIONS.md`](DECISIONS.md) for a dated log of decisions made while building.

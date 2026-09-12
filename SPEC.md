@@ -1,360 +1,194 @@
 # vodscout — Design Spec
 
-## What this is
+## Purpose
 
-A CLI tool for Twitch VOD chat: download chat logs for VODs, track which
-parts of a VOD you've already watched, and analyze chat activity to find
-interesting moments — especially ones in parts you haven't seen yet.
+A personal tool for finding parts of a Twitch VOD worth checking out, especially
+parts not yet watched. It grew from manually downloaded chat logs and
+`chat_freq.py`: choose an emote that means something in a familiar streamer's
+chat, inspect where many messages contain it, and jump into the VOD.
 
-Originally grew out of a personal `td` alias wrapping `TwitchDownloaderCLI`,
-plus a one-off Python script for finding chat activity spikes and emote
-usage in a downloaded chat log.
+The main interface is a Textual TUI. It combines chat downloads, watched-range
+tracking, and simple message-frequency results. The user supplies the judgment
+about which reactions are interesting. The older CLI spike analysis remains
+available, but does not drive the TUI.
 
-## Why
+## Architecture
 
-Twitch VODs are long. Chat activity (volume spikes, specific emote usage)
-is a decent proxy for "something interesting happened here." Existing
-tools (TwitchTracker, etc.) do channel-level stats, not "help me find
-the good parts of *this* VOD I haven't watched yet."
+Three independent legs communicate through files on disk:
 
-## Architecture: three independent legs
+- `fetcher.py` acquires chat and VOD metadata.
+- `watched.py` records and infers watched ranges.
+- `analyzer.py` reads chat and computes frequency windows or legacy spikes.
 
-The project is split into three pieces that share file-based conventions
-but don't depend on each other's internals.
+The front ends are `ui.py` and `cli.py`. Cross-leg orchestration lives in
+`actions.py` and `vodlist.py`: the TUI uses `actions.search`, the CLI uses
+`actions.analyze`, and both reuse watched operations and VOD-list merging.
+Watched inference imports chat-loading helpers from the analyzer; the analyzer
+accepts plain ranges supplied by its caller and does not import watched tracking.
+There is no shared in-process state between the legs. Textual dependencies stay
+in `ui.py`; CLI output and interaction stay in the CLI and its report renderer.
 
-### 1. Fetcher
+## Fetcher and VOD library
 
-**Job:** get a VOD's chat log onto disk, organized by streamer.
+Chat download and streamer-name VOD discovery use Twitch's public GQL endpoint
+(`gql.twitch.tv`) with its public web Client-ID. The backend uses `requests`
+directly. No private credentials, developer app, external downloader binary,
+rendered-page scraping, or video downloading are required.
 
-Two ways to point the tool at VODs, neither requiring credentials:
+Users can provide a VOD URL/ID or browse a streamer's recent archived VODs.
+Downloads write JSON-lines chat records with timestamps, usernames, message text,
+and recognized emote names. Twitch emotes come from message fragments;
+BTTV/FFZ/7TV names are resolved at fetch time. Analysis works offline.
 
-- **By VOD URL or ID.** User provides a VOD URL or ID directly (already
-  knows it, e.g. copied from twitch.tv). Tool downloads chat for that VOD.
-- **By streamer name.** User provides a streamer name. Tool lists the
-  streamer's recent archived VODs, diffs against what's already downloaded
-  locally, and lets the user pick which to fetch.
+A metadata sidecar stores title, publication date, and duration. Refreshing the
+VOD list also caches metadata for recent undownloaded VODs, so they appear on
+subsequent offline loads. Metadata writes are best-effort and create missing
+streamer directories. Incomplete chat pagination fails the download and removes
+the temporary chat file rather than leaving a successful-looking partial log.
 
-Both use the same access mechanism: Twitch's public GQL endpoint
-(`gql.twitch.tv`) with the public web Client-ID — the same endpoint and
-the same chat-replay data established tools (`TwitchDownloaderCLI`,
-`chat-downloader`) and the web player itself use. Chat download and
-streamer-name discovery are two queries against that one endpoint. No
-Twitch Developer app, no user-supplied credentials.
+Local downloaded VODs remain listed even when they disappear from Twitch's recent
+list. Successful refreshes prune stale undownloaded metadata cache entries;
+network failures preserve the available local list. Deleting a downloaded VOD
+removes its chat and watched history but keeps its metadata, allowing it to stay
+listed for re-download. A later refresh may prune that metadata if the VOD is no
+longer recent.
 
-At download time the fetcher also writes a `<vod_id>.meta.json` sidecar
-(title, publish date, duration) next to the chat log. This lets `list`
-show a rich view of downloaded VODs offline, and feeds VOD titles into
-analyzer/emote reports. Best-effort — a sidecar write failure never fails
-the chat download. A Twitch refresh additionally caches a `.meta.json` for
-every *recent* VOD, including ones not downloaded — that cache is the only
-on-disk trace of an undownloaded VOD, so the next offline load can show
-recent VODs (downloaded or not) with no network call (see DECISIONS
-2026-06-22).
+## Watched-range tracking
 
-> **History / reversal.** An earlier design did streamer-name discovery
-> through Twitch's *official* Helix API, which requires each user to
-> register their own dev app (client ID + secret). That was dropped
-> (2026-06-21): chat download already runs on the unofficial GQL endpoint,
-> so the Helix path was paying a real onboarding cost (dev-app setup) to
-> avoid GQL for *just the listing step* — a distinction that bought
-> nothing while GQL was already in use for the heavier chat download. GQL
-> can list a channel's archived videos with no credentials (it's what the
-> channel "Videos" page does), so discovery moved onto it too and the
-> credential plumbing was removed. (Scraping the rendered videos *page*
-> via a headless browser remains rejected — fragile, and unnecessary when
-> the GQL query returns clean structured data.)
+Watched history consists of half-open time ranges `[start, end)` per VOD.
+Manual edits and chat-inferred ranges supply the data; vodscout does not import
+Twitch watch history or automatically observe VOD playback.
 
-**Underlying chat download mechanism:** initially considered two
-backends — `chat-downloader` (Python package, in-process) vs. shelling
-out to `TwitchDownloaderCLI` (external binary, what the user's existing
-`td` alias used) — with a plan to support both. That dual-backend plan
-was dropped (see DECISIONS.md 2026-06-20): `chat-downloader` was broken
-(stale client ID), `TwitchDownloaderCLI` needs an external binary, and
-every alternative ultimately talks to the same GQL endpoint anyway. So
-the fetcher now reads chat directly from `gql.twitch.tv` itself (~30 lines
-of `requests`), a single in-process backend with no external dependency.
-Chat logs are ephemeral, so there's no archive-format-consistency reason
-to keep a second backend.
+Chat inference clusters the user's messages by gaps. The default gap threshold
+is 180 seconds, configurable and overridable with CLI `watched --infer --gap`.
+Only the outermost session edges receive padding; real breaks stay unwatched.
+Empty ranges are discarded. This is an assistive estimate of live viewing:
+chat silence is imperfect evidence, and it does not capture catch-up playback.
 
-### 2. Watched-range tracking
+TUI downloads infer history when none exists and a username is configured.
+Opening a VOD also covers chats fetched outside the TUI. Existing watched files,
+including explicitly empty ones, prevent automatic re-inference. Explicit
+inference merges suggestions with saved ranges.
 
-**Job:** record which time ranges of a VOD the user has already watched,
-so the analyzer can focus on what's left.
+The TUI's `e` editor accepts one `H:MM:SS-H:MM:SS` range per line; saving replaces
+the ranges. CLI `watched` supports display, `--add`, `--infer`, `--edit`, and
+`--clear`. Clearing persists an empty file. Saving normalizes and merges ranges.
+`m` marks a selected frequency result's 10-second interval with source `moment`;
+undo is through the range editor. The playback lead-in does not expand this mark.
 
-Twitch does not expose per-user VOD watch-progress through any API
-(official or otherwise) — this isn't obtainable, full stop. So tracking
-is necessarily either manual or inferred from the user's own chat
-activity in that VOD.
+## Frequency analysis in the TUI
 
-- **Manual ranges.** User enters time ranges they've watched. Primary,
-  trustworthy source of truth.
-- **Chat-inferred ranges (assistive, not authoritative).** If the user
-  provides their Twitch username, the tool can look at their own message
-  timestamps in the VOD's chat and infer likely-watched ranges via
-  gap-based session segmentation: cluster messages where the gap between
-  consecutive messages is below some threshold, split into separate
-  ranges where the gap exceeds it. Pad the outermost edges of each
-  cluster slightly (a real break is left fully unwatched; see DECISIONS.md
-  2026-06-21). Threshold is configurable (`gap_threshold_seconds`,
-  currently 180s — tuned down from an initial 8–10 min guess) and
-  overridable per-run via `--gap`. This is a *suggestion* the user
-  reviews/edits, not ground truth — chat
-  silence doesn't mean not-watching, and it's blind to VODs watched
-  without chatting at all.
+The VOD screen starts with the emote list focused, favorites first. Selecting an
+emote matches its full name case-insensitively, using metadata or exact
+whitespace tokens when provider metadata is missing. `OOOO` does not match
+`LMAOOOOOOO`. Each matching message counts once, even if it repeats the emote.
+The emote list's usage totals count occurrences; result counts count messages.
 
-**Entry point.** `vodscout watched <vod-id>` shows current ranges; CLI edits
-are flag-driven: `--add START-END` (manual range), `--infer` (suggest from
-your chat, with `--user`/`--gap`), `--edit` ($EDITOR). The originally-envisioned
-interactive editing — deferred on the CLI side as an open question — now lives in
-the **TUI** instead: a VOD with no watched data auto-infers from your chat on
-first open, `e` opens an inline range editor (one `H:MM:SS-H:MM:SS` per line; save
-is a full replace), and `i` re-infers; see DECISIONS.md 2026-06-21.
+Results use fixed 10-second windows. Every nonempty matching window appears,
+initially highest count first with chronological ties. Users can toggle time or
+count sorting. There are no minimum-count or From/Until controls, rolling
+baselines, merged runs, or top-N limits in this view.
 
-**Editing.** Should support: interactive add/toggle from the inferred
-suggestion list, direct edit of the underlying file via `$EDITOR`, and
-(later) quick merge/trim verbs ("extend last range by 10 min", "split at
-1:15:00").
+Unwatched is initially selected. It excludes individual watched messages before
+counting, including messages in a partially watched window. All bypasses that
+exclusion; a result entirely covered by saved ranges is labeled watched.
 
-Clearing ranges (CLI `--clear` or saving an empty TUI editor) keeps an empty
-watched file, so reopening does not auto-infer again. Explicit inference still
-works. A missing file means no watched state has been recorded yet.
+`/` reveals optional literal, case-insensitive substring search. Enter applies
+it, hides the field, and focuses results; Escape hides it and focuses emotes.
+Selecting an emote always uses full-name matching, even after a text search.
+Busiest chat counts all messages under the current watched filter and initially
+sorts by count.
 
-**Persistence.** Flat file per VOD, sitting next to the chat log:
+Enter on a result opens a Twitch link five seconds before its timestamp, clamped
+to zero. Displayed timestamps remain the actual window starts. Links use the
+system browser; reusing an existing player/tab is not implemented.
 
-```
-<chat_dir>/<streamer>/<vod_id>.txt            # chat log
-<chat_dir>/<streamer>/<vod_id>.watched.json   # watched ranges
-```
+Favorites are per-streamer emote names, persisted in `favorites.json`. They pin
+emotes in the list without boosting result counts or ranking. Saved names remain
+selectable even if absent from the VOD's recognized emote metadata. `f` toggles
+the selected emote; Ctrl+F opens a type-to-filter favorite picker.
 
-```json
-{
-  "ranges": [
-    {"start_seconds": 0, "end_seconds": 6300, "source": "manual"},
-    {"start_seconds": 12000, "end_seconds": 14400, "source": "chat-inferred"}
-  ],
-  "last_updated": "2026-06-20T10:00:00Z"
-}
-```
+## Legacy CLI analysis
 
-### 3. Analyzer
+`vodscout analyze <vod-id>` retains the older rolling-baseline detector. It uses
+60-second buckets by default, flags buckets above their trailing baseline,
+merges adjacent flagged buckets, and ranks runs by relative increase. Baselines
+use up to 30 preceding buckets, require at least three samples, and must average
+at least two messages/uses per bucket. This can exclude bursts of rare emotes.
 
-**Job:** take a chat log (+ optional watched ranges) and produce a list
-of "interesting moments," ranked, ideally biased toward unwatched parts
-of the VOD.
+The overall view counts messages and annotates each run with its top emotes.
+`--emote <query>` resolves a case-insensitive exact or partial name to the
+most-used match, then counts that emote's occurrences, including repetitions
+within a message. This matching and counting differs from TUI emote selection.
 
-### TUI frequency search (2026-09-12)
+`--top` limits the report (default 10); `--include-watched` retains watched
+moments. Legacy watched filtering checks the peak timestamp after detection,
+rather than excluding individual messages before counting. CLI links use the
+same five-second playback lead-in as the TUI.
 
-The VOD screen opens with the emote list focused, favorites first. Selecting
-an emote matches its full name case-insensitively, using emote metadata or exact
-whitespace tokens for logs with missing provider metadata. Each message counts
-once, even with repeated emotes. `OOOO` cannot match `LMAOOOOOOO`.
+The separate `emotes` command reports usage totals for one VOD or a streamer's
+downloaded chats. Neither CLI analysis command changes watched history.
 
-Results count messages in fixed 10-second buckets, initially highest count first
-(ties chronological). Every nonempty matching bucket is shown: no minimum,
-From/Until fields, baseline, merging, or top-N cutoff. Time/count ordering is
-toggleable. Busiest chat counts all messages and initially sorts by count.
-`/` reveals a small optional literal substring search; Enter applies and hides
-it, Escape hides it and returns focus to emotes. The frequency API also returns
-all nonempty windows; it has no unused minimum or time-bound options.
+## Interactive navigation
 
-Unwatched is initially selected and excludes individual watched messages before
-counting. All bypasses exclusions; a fully covered result is labeled watched.
-`m` marks the result's 10-second window. Enter opens a link five seconds before
-the result (clamped to zero), providing context without changing the displayed
-time or watched interval. CLI result links use the same five-second lead-in.
-The existing on-disk layout and sync arrangements are preserved.
+Run `vodscout` or `vodscout browse [streamer]`. Streamer selection uses the
+argument, then `default_streamer`, then a prompt. The initial list reads local
+chat and cached metadata without a network request.
 
-The descriptions of baseline analysis and the old moments/emotes screen below
-are retained as history and for the unchanged CLI `analyze` path. The TUI uses
-`actions.search` and `analyzer.frequency_windows` instead of `actions.analyze`.
+- `r` refreshes recent VODs; `d` downloads the selected chat.
+- Enter opens a downloaded VOD or confirms downloading an undownloaded one.
+- The VOD window shows results and emotes side by side. Enter selects an emote
+  or opens a result; Tab moves focus.
+- `w` toggles All/Unwatched; `s` toggles sorting; `o` shows Busiest chat.
+- `/` opens text search; `f` and Ctrl+F manage favorites.
+- `m` marks a result watched; `e` edits history; `i` re-infers.
+- Escape returns to the list, or first leaves an active text input.
+- `x` confirms deletion from either screen. `q` quits, confirming if a download
+  is active so cancellation is deliberate.
 
-### Legacy CLI spike analysis
+Downloads and Twitch list refreshes use background workers. The list remains
+usable, downloads show progress, duplicate refresh requests are ignored, and
+local files are re-read when merging refresh results. Undownloaded rows have no
+watched-coverage value.
 
-The core mechanic is shared: bucket messages into fixed time windows,
-compute a rolling baseline (trailing average over some window), and flag
-buckets exceeding it. This drives two distinct, separately-invoked
-analyses rather than one merged timeline (a merged "multi-signal" timeline
-was tried and reverted — it read as confusing jargon):
-
-1. **Overall view** (`analyze <vod>`). Moments where overall chat *volume*
-   spiked above its recent normal. Each moment is annotated with the top
-   emotes used in that window — emotes are the readable signal of *what*
-   the moment was (raw word tokens were tried as context and dropped as
-   noise). Output: timestamp, magnitude ("N× normal"), top emotes, a
-   direct timestamped VOD link.
-2. **Per-emote view** (`analyze <vod> --emote <name>`). Moments where one
-   chosen emote spiked above *its own* normal rate. No usage threshold —
-   the user picked the emote deliberately. Output per moment: timestamp,
-   magnitude (× the emote's baseline) and absolute uses (a rare emote can
-   jump 9× off a tiny base without mattering, so both numbers matter). The
-   `--emote` argument is resolved forgivingly against the emotes present in
-   the VOD: case-insensitive, and partial — `lmaoo` finds `LMAOOOOOOOOOO`
-   — picking the most-used match and reporting it.
-
-Emotes are central to both, so the chat log stores emote **names** (not
-IDs) — the analyzer, the `emotes` command, and reports all speak the same
-human-readable language. Both first-party Twitch emotes and third-party
-BTTV/FFZ/7TV emotes are counted: the fetcher resolves the channel's
-third-party emote sets at download time and records them by name in the
-log, so the analyzer needs no network access and treats all emotes
-uniformly.
-
-A separate `emotes` command surfaces top emotes by usage for a single
-VOD or aggregated across all of a streamer's downloaded chats — read-only
-insight into what a chat actually spams. The natural flow is `emotes`
-(what gets spammed here) → `analyze` (the hype moments) → `analyze
---emote X` (when specifically X popped off).
-
-*Considered and dropped:* a per-streamer config mapping emotes to
-semantic labels ("hype"/"sad"/"rage") for nicer report wording. Too much
-manual setup for the payoff; raw emote names are clear enough. A
-**per-streamer "favorite emotes" list** (a plain list, persisted as a
-`<streamer>/favorites.json` sidecar) *is* built: the TUI pins favorited emotes
-to the top of its emote pane. The originally-imagined further use — *boosting*
-the ranking of moments involving those emotes — was dropped (see DECISIONS
-2026-06-21): it re-introduces a moment-scoring boost already reverted as
-confusing, and favorites earn their keep as a pin + drill-in affordance without
-it.
-
-When watched ranges exist for the VOD, the report filters out watched
-moments by default (`--include-watched` opts back in).
-
-v1 explicitly does *not* include (deferred to later): message-length/caps
-anomaly detection, and any combined cross-signal scoring.
-
-**Output (v1):** CLI report. Top N moments, each with timestamp, a direct
-timestamped VOD link (`https://twitch.tv/videos/<id>?t=<XXhXXmXXs>`), and
-why it's interesting. A simple terminal timeline (e.g. ASCII sparkline of
-activity, or a row representing watched vs. unwatched vs. flagged
-moments) is worth doing here too, since the watched-range timeline and
-the analyzer's moment-timeline are likely the same underlying renderer
-with different highlighted intervals.
-
-## Interactive shell (front end, not a fourth leg)
-
-The CLI is fully retained — it's scriptable, composable, and good for one-off
-invocations. On top of it (not replacing it) there's an **interactive shell**:
-`vodscout browse [streamer]`, or a bare `vodscout` with no subcommand. The point
-is to kill the tedium of stateless re-invocation — re-typing the streamer, then
-copying a VOD id, then re-typing it for each follow-up command. The shell holds
-that context.
-
-It is a *second consumer* of the three legs' APIs, parallel to `cli.py` — not a
-new leg. Session state is just the **current streamer** (its merged VOD list)
-and the **selected VOD**. Flow: resolve a streamer (arg → `default_streamer`
-config key → prompt) → arrow through the VOD **list** (on open: your downloads
-plus recent VODs cached from the last refresh, so even not-yet-downloaded ones
-show with no network call; `r` refreshes from Twitch and re-caches; `d`
-downloads the highlighted VOD's chat, `x` deletes it) → press Enter on a
-*downloaded* VOD to drill into a full-screen VOD **window** showing top moments
-(left) and emotes (right) side by side. Pressing Enter on an *undownloaded* VOD
-instead asks to confirm a download (there's nothing to show until its chat is on
-disk, so the window would be empty). In the window: `w` toggles All/Unwatched
-(drives the moment list), Enter opens a moment's timestamped link or drills into
-an emote's own spikes, `f` favorites the highlighted emote (pinned first) — or
-`/` opens a type-to-filter picker over the VOD's emotes to search-and-favorite
-one without scrolling — and Esc returns to the list. `x` deletes a VOD's
-downloaded chat + watched history from *either* screen (the list's highlighted
-row, or the open VOD) — always behind a confirm; the VOD stays listed as an
-undownloaded, re-downloadable row.
-Downloads run as a non-blocking background worker — you keep browsing while a
-chat downloads. Twitch list refreshes also fetch in a background worker, keeping
-the current list usable until results arrive. Repeated refresh requests are
-ignored while one is running. Local files are re-read when merging the response.
-During a download,
-the row shows a spinner + a live progress bar/percent (how far
-the fetched chat has reached through the VOD), and it flips to downloaded when it
-finishes. The list's watched column is blank for undownloaded VODs — coverage
-only means something once the chat is on disk.
-Watched tracking lives here too: coverage shows in the window, a VOD with no
-watched data auto-infers from your chat on first open, `e` opens an inline range
-editor, and `i` re-infers (see the watched section).
-
-Implementation is contained in `ui.py`: the three legs never import it, and all
-interactive-UI dependencies live there. Built as a full-screen **Textual** TUI
-(drill-in screens, side-by-side panes, a persistent All/Unwatched toggle). It
-began as a lightweight **questionary** sequence-of-prompts shell, replaced once
-that model proved limiting — output scrolled instead of holding a view, and it
-couldn't show moments and emotes together or carry a persistent toggle.
-Confining all UI deps to `ui.py` made the swap contained, as planned (see
-DECISIONS 2026-06-21).
-
-Cross-leg orchestration the two front ends share lives in small, front-end-
-neutral modules they both import — not in the legs, and not duplicated:
-`vodlist.merged_vods` (the local+remote VOD list) and `actions.analyze` /
-`actions.emote_counts` (spike detection + watched-range filtering). These
-compose `analyzer` and `watched`, which can't import each other (`watched`
-imports `analyzer`), so the glue belongs one level up. `analyzer.report` (Rich)
-is the CLI's moment renderer; the TUI renders moments into its own Textual
-widgets from the same `actions` results.
-
-## Shared conventions
-
-- **Directory layout**, configurable root, organized by streamer:
-  ```
-  <chat_dir>/
-    <streamer>/
-      <vod_id>.txt            # chat log (JSON-lines)
-      <vod_id>.meta.json      # VOD metadata (title, date, duration)
-      <vod_id>.watched.json   # watched ranges
-  ```
-- **Config file.** TOML, e.g. `~/.config/vodscout/config.toml`:
-  ```toml
-  chat_dir = "~/SynologyDrive/chats"
-  twitch_username = "..."     # your login, default for `watched --infer`
-  default_streamer = "..."    # streamer the bare `vodscout` shell opens to
-  ```
-  First run with no config present should prompt interactively and write
-  the file, rather than requiring manual setup.
-- **Detection thresholds** (bucket size, gap threshold for
-  watched-inference) are hardcoded defaults, overridable via the config
-  file. The spike-baseline constants (`MIN_BASELINE`, baseline window,
-  etc.) live in the analyzer, not config. `--emote` is the one analysis
-  CLI flag; revisit exposing more if per-run experimentation is wanted.
-
-## Commands (rough sketch, not final)
+## Storage and configuration
 
 ```
-vodscout                                # interactive shell (uses default_streamer if set)
-vodscout browse <streamer>              # interactive shell, opened to a streamer
-vodscout vods <streamer>                # browse: your downloads + recent Twitch VODs, merged
-vodscout vods <streamer> --offline      # browse local downloads only, no Twitch call
-vodscout vods <streamer> --all          # download all not-yet-downloaded VODs
-vodscout vods <streamer> --get 1,3      # download those rows from the list
-vodscout vods <streamer> --pick         # list, then prompt for which to download
-vodscout vods --url <vod-url>           # download one VOD by URL/ID
-vodscout emotes <vod-id>                # top emotes for one VOD
-vodscout emotes <streamer>              # top emotes across a streamer's VODs
-vodscout watched <vod-id>                # show watched ranges
-vodscout watched <vod-id> --add 1:00:00-1:30:00   # add a manual range
-vodscout watched <vod-id> --infer        # suggest ranges from your own chat
-vodscout watched <vod-id> --edit         # edit the ranges file in $EDITOR
-vodscout watched <vod-id> --clear        # remove all watched ranges
-vodscout analyze <vod-id>                # top moments by chat volume (+ top emotes)
-vodscout analyze <vod-id> --emote <name> # top moments for one emote
-vodscout delete <vod-id>                 # delete a VOD's chat + watched history; stays listed (-y skips confirm)
+<chat_dir>/
+  <streamer>/
+    <vod_id>.txt            # JSON-lines chat
+    <vod_id>.meta.json      # VOD metadata; alone means undownloaded cache
+    <vod_id>.watched.json   # watched ranges and last_updated
+    favorites.json         # saved emote names
 ```
 
-## Explicitly out of scope (for now)
+These files are the persistent source of truth. A synced directory, such as the
+user's Synology Drive folder, carries chat and watched state across computers.
+Vodscout has no separate sync service or conflict-resolution protocol.
 
-- Browser extension version (possible v2 if the CLI tool proves out;
-  would reuse the analyzer's core logic, add DOM injection / manifest
-  plumbing on top)
-- Full Twitch chat client
-- Scraping Twitch's rendered web pages (e.g. a headless browser against
-  the channel videos page) — the GQL endpoint returns the same data
-  cleanly, so page-scraping buys nothing. (Note: the tool *does* use
-  Twitch's public GQL endpoint for chat download and VOD discovery; see
-  the Fetcher section.)
-- Downloading actual video files (this tool is chat-only)
+Config is TOML at `~/.config/vodscout/config.toml`; first run prompts and writes it:
 
-## Open questions (intentionally unresolved — figure out while building)
+```toml
+chat_dir = "~/SynologyDrive/vodscout"
+twitch_username = "..."
+default_streamer = "erobb221"
 
-- Exact bucket-size default for chat-rate spikes (currently 60s). Spike
-  detection settled on top-N over a rolling baseline — no multiplier
-  threshold (see DECISIONS.md 2026-06-20).
-- Gap-threshold default landed at 180s but is personal/streamer-dependent,
-  not a claim of correctness; open whether density-weighting before the
-  gap (not just a fixed threshold) is worth the complexity.
-- Exact interactive UX/prompts for `vodscout watched`
-- Exact terminal timeline rendering approach
+[analysis]
+bucket_seconds = 60             # legacy CLI only; TUI windows stay 10 seconds
+gap_threshold_seconds = 180     # watched inference
+```
+
+The baseline constants live in the analyzer. There are no TUI threshold settings.
+For command examples and key bindings, see `README.md`; for dated design changes
+and rejected approaches, see `DECISIONS.md`.
+
+## Deferred and out of scope
+
+- A browser companion could seek the existing player and record playback ranges.
+  It is deferred until further use establishes the need; integration with the
+  existing file-based history and sync would need a design.
+- Retiring or replacing the legacy CLI detector is a separate behavior change.
+- No combined scoring, semantic emote categories, or additional anomaly signals
+  are planned for the current frequency view.
+- Full chat clients, rendered Twitch page scraping, and video downloads remain
+  out of scope.
