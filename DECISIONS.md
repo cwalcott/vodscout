@@ -15,6 +15,12 @@ Format:
 
 ---
 
+## 2026-09-12 — first refresh creates the metadata cache directory
+
+- Metadata writes create the streamer directory (and missing parents), so a
+  first refresh persists recent VODs even before any chat has been downloaded.
+  Directory creation remains best-effort alongside the metadata write.
+
 ## 2026-09-12 — clearing watched ranges persists an explicit empty state
 
 - `watched --clear` and saving an empty TUI editor retain an empty watched

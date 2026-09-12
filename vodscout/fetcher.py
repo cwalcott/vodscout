@@ -376,6 +376,7 @@ def _write_meta_file(streamer_dir: Path, data: dict) -> None:
     """Write a `{id,title,created_at,duration_seconds}` sidecar. Best-effort:
     a write failure must never fail the fetch/refresh that triggered it."""
     try:
+        streamer_dir.mkdir(parents=True, exist_ok=True)
         _meta_path(data["id"], streamer_dir).write_text(
             json.dumps(data, ensure_ascii=False, indent=2)
         )

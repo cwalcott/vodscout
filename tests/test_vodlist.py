@@ -62,6 +62,27 @@ def test_remote_refresh_caches_all_recent_vods(tmp_path, monkeypatch):
     assert _meta(sdir, "111") is not None  # downloaded VOD's sidecar refreshed too
 
 
+def test_first_refresh_caches_vods_without_existing_chat_directory(
+    tmp_path, monkeypatch
+):
+    config = Config(chat_dir=tmp_path / "chats")
+    _patch_remote(monkeypatch, [_remote("111"), _remote("222")])
+
+    online, _, note = vodlist.merged_vods("shroud", config, offline=False)
+    assert note is None
+    assert len(online) == 2
+
+    def unexpected_network_call(streamer):
+        raise AssertionError("Offline listing must use the persisted cache")
+
+    monkeypatch.setattr(fetcher, "list_remote_vods", unexpected_network_call)
+    offline, _, note = vodlist.merged_vods("shroud", config, offline=True)
+    assert note is None
+    assert [row["id"] for row in offline] == ["222", "111"]
+    assert all(not row["downloaded"] for row in offline)
+    assert _meta(config.chat_dir / "shroud", "111")["title"] == "t"
+
+
 def test_cached_undownloaded_vods_show_at_startup_offline(tmp_path, monkeypatch):
     config = Config(chat_dir=tmp_path)
     sdir = _streamer_dir(tmp_path)
