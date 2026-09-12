@@ -90,16 +90,34 @@ def test_disjoint_ranges_stay_separate_and_sorted(chat_dir):
 # ── clear ─────────────────────────────────────────────────────────────────────
 
 
-def test_clear_removes_file_and_returns_true(chat_dir):
+def test_clear_keeps_empty_file_and_returns_true(chat_dir):
     watched.save(WatchedRanges([WatchedRange(0, 60, "manual")], ""), "12345", chat_dir)
     assert watched.clear("12345", chat_dir) is True
-    assert not (chat_dir / "shroud" / "12345.watched.json").exists()
-    # load() treats the now-missing file as empty, not an error.
+    assert (chat_dir / "shroud" / "12345.watched.json").exists()
     assert watched.load("12345", chat_dir).ranges == []
 
 
 def test_clear_no_file_returns_false(chat_dir):
     assert watched.clear("12345", chat_dir) is False
+    assert (chat_dir / "shroud" / "12345.watched.json").exists()
+    assert watched.load("12345", chat_dir).ranges == []
+
+
+@pytest.mark.parametrize("infer_first", [False, True])
+def test_clear_suppresses_auto_inference_but_allows_explicit_inference(
+    chat_dir, infer_first
+):
+    from vodscout.config import Config
+    from vodscout.ui import _infer_watched
+
+    _write_log(chat_dir, [(100, "me")])
+    config = Config(chat_dir, twitch_username="me")
+    if infer_first:
+        assert _infer_watched("12345", config) == 1
+    watched.clear("12345", chat_dir)
+    assert _infer_watched("12345", config) == 0
+    assert watched.load("12345", chat_dir).ranges == []
+    assert watched.infer_from_chat("12345", "me", chat_dir)
 
 
 def test_empty_ranges_are_dropped(chat_dir):

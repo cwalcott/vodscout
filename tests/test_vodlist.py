@@ -1,7 +1,21 @@
 import json
 
-from vodscout import fetcher, vodlist
+from vodscout import fetcher, vodlist, watched
 from vodscout.config import Config
+
+
+def test_cleared_vod_is_not_tagged_watched(tmp_path):
+    sdir = _streamer_dir(tmp_path)
+    (sdir / "111.txt").write_text("")
+    config = Config(tmp_path)
+    watched.save(
+        watched.WatchedRanges([watched.WatchedRange(0, 60, "manual")], ""),
+        "111",
+        tmp_path,
+    )
+    assert vodlist.merged_vods("shroud", config, True)[0][0]["watched"]
+    watched.clear("111", tmp_path)
+    assert not vodlist.merged_vods("shroud", config, True)[0][0]["watched"]
 
 
 def _remote(

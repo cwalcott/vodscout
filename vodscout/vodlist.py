@@ -1,13 +1,13 @@
 """Shared VOD-list orchestration used by both front ends (cli.py and ui.py).
 
 Merges a streamer's local downloads with Twitch's recent VODs into one ordered
-list. This is front-end orchestration, not a leg: it composes the fetcher (and
-a watched-file existence check) but holds no state and is imported by both the
+list. This is front-end orchestration, not a leg: it composes the fetcher and
+watched-range loading but holds no state and is imported by both the
 command-line and interactive front ends so they show the same list.
 """
 
 from vodscout import config as cfg
-from vodscout import fetcher
+from vodscout import fetcher, watched
 
 
 def merged_vods(
@@ -28,10 +28,14 @@ def merged_vods(
     streamer_dir = config.chat_dir / streamer
     rows: dict[str, dict] = {}
     for v in fetcher.local_vods(streamer, config):
+        try:
+            has_ranges = bool(watched.load(v["id"], config.chat_dir).ranges)
+        except (OSError, ValueError, KeyError, TypeError):
+            has_ranges = False
         rows[v["id"]] = {
             **v,
             "downloaded": True,
-            "watched": (streamer_dir / f"{v['id']}.watched.json").exists(),
+            "watched": has_ranges,
         }
     # Recent undownloaded VODs cached on the last refresh — shown at startup
     # (offline) without a network call; live remote data tops these up below.

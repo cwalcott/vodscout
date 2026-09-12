@@ -15,6 +15,14 @@ Format:
 
 ---
 
+## 2026-09-12 — clearing watched ranges persists an explicit empty state
+
+- `watched --clear` and saving an empty TUI editor retain an empty watched
+  sidecar, including when none existed before. This prevents first-open automatic
+  inference from undoing a deliberate clear. Explicit `--infer` / `i` still work;
+  deleting downloaded chat still removes the sidecar. VOD-list watched tags now
+  reflect actual ranges rather than file existence.
+
 ## 2026-09-12 — incomplete chat pagination fails instead of saving partial logs
 
 - Empty chat pages end pagination only when `hasNextPage` is explicitly false.

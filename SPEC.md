@@ -115,6 +115,10 @@ suggestion list, direct edit of the underlying file via `$EDITOR`, and
 (later) quick merge/trim verbs ("extend last range by 10 min", "split at
 1:15:00").
 
+Clearing ranges (CLI `--clear` or saving an empty TUI editor) keeps an empty
+watched file, so reopening does not auto-infer again. Explicit inference still
+works. A missing file means no watched state has been recorded yet.
+
 **Persistence.** Flat file per VOD, sitting next to the chat log:
 
 ```
