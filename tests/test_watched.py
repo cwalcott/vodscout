@@ -106,7 +106,10 @@ def test_empty_ranges_are_dropped(chat_dir):
     # Half-open [start, end): a zero-length range covers nothing, and parse_range
     # can't re-express it, so it never reaches disk.
     w = WatchedRanges(
-        ranges=[WatchedRange(750, 750, "chat-inferred"), WatchedRange(0, 100, "manual")],
+        ranges=[
+            WatchedRange(750, 750, "chat-inferred"),
+            WatchedRange(0, 100, "manual"),
+        ],
         last_updated="",
     )
     watched.save(w, "12345", chat_dir)
@@ -121,7 +124,11 @@ def test_load_drops_empty_ranges_written_by_an_older_version(chat_dir):
             {
                 "ranges": [
                     {"start_seconds": 0, "end_seconds": 100, "source": "manual"},
-                    {"start_seconds": 754, "end_seconds": 754, "source": "chat-inferred"},
+                    {
+                        "start_seconds": 754,
+                        "end_seconds": 754,
+                        "source": "chat-inferred",
+                    },
                 ],
                 "last_updated": "2026-07-01T00:00:00+00:00",
             }
