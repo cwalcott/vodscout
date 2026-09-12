@@ -195,6 +195,7 @@ class VodListScreen(Screen):
         # vod_id -> cancel flag, set on quit so a download aborts promptly (a
         # thread worker can't be force-killed, so it has to opt out itself).
         self._cancels: dict[str, threading.Event] = {}
+        self._refreshing = False
         # Spinner animation for in-flight downloads: a paused interval that runs
         # only while something is downloading (resumed in start_download, paused
         # again when the last one finishes).
@@ -203,13 +204,15 @@ class VodListScreen(Screen):
         self._populate(offline=True)  # local-only on launch — no startup freeze
         table.focus()
 
-    def _populate(self, offline: bool) -> None:
+    def _populate(
+        self, offline: bool, *, remote_vods: list[dict] | None = None
+    ) -> None:
         table = self.query_one("#vodlist", DataTable)
         table.clear()
         self._rows = {}
         try:
             rows, login, note = vodlist.merged_vods(
-                self.app.streamer, self.app.config, offline
+                self.app.streamer, self.app.config, offline, remote_vods=remote_vods
             )
         except Exception as e:
             self.notify(f"Couldn't load VODs: {e}", severity="error")
@@ -311,10 +314,21 @@ class VodListScreen(Screen):
     def action_refresh(self) -> None:
         # r hits Twitch — unless the app was launched with --offline, which keeps
         # it local (r then just re-reads disk).
-        self._populate(offline=self.app.offline)
-        self.notify(
-            "Reloaded local VODs." if self.app.offline else "Refreshed from Twitch."
+        if self.app.offline:
+            self._populate(offline=True)
+            self.notify("Reloaded local VODs.")
+            return
+        if self._refreshing:
+            self.notify("Refresh already in progress.")
+            return
+        self._refreshing = True
+        self.run_worker(
+            partial(fetcher.list_remote_vods, self.app.streamer),
+            group="refresh",
+            thread=True,
+            exit_on_error=False,
         )
+        self.notify("Refreshing from Twitch…")
 
     def action_download(self) -> None:
         """Start a background download for the highlighted row."""
@@ -484,6 +498,20 @@ class VodListScreen(Screen):
             table.update_cell_at(Coordinate(row, 4), indicator)
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        if event.worker.group == "refresh":
+            if event.state is WorkerState.SUCCESS:
+                self._refreshing = False
+                self._populate(offline=False, remote_vods=event.worker.result)
+                self.notify("Refreshed from Twitch.")
+            elif event.state is WorkerState.ERROR:
+                self._refreshing = False
+                self.notify(
+                    f"Couldn't refresh from Twitch: {event.worker.error}",
+                    severity="warning",
+                )
+            elif event.state is WorkerState.CANCELLED:
+                self._refreshing = False
+            return
         if event.worker.group != "downloads":
             return
         vod_id = event.worker.name

@@ -11,13 +11,19 @@ from vodscout import fetcher, watched
 
 
 def merged_vods(
-    streamer: str, config: "cfg.Config", offline: bool
+    streamer: str,
+    config: "cfg.Config",
+    offline: bool,
+    *,
+    remote_vods: list[dict] | None = None,
 ) -> tuple[list[dict], str, str | None]:
     """Merge local downloads (source of truth) with Twitch's recent VODs.
 
     Returns (rows newest-first, resolved login, note). Local downloads are never
     dropped; the remote check only adds new VODs and tops up metadata. A remote
     failure is reported via `note`, not raised — local rows still come back.
+    `remote_vods` supplies an already-fetched response (for background TUI
+    refreshes), so local state is read and merged after the request completes.
 
     Side effect on a successful remote fetch: every recent VOD's metadata is
     cached to a `.meta.json` sidecar (downloaded or not), and undownloaded cache
@@ -46,7 +52,11 @@ def merged_vods(
     note: str | None = None
     if not offline:
         try:
-            remote = fetcher.list_remote_vods(streamer)
+            remote = (
+                remote_vods
+                if remote_vods is not None
+                else fetcher.list_remote_vods(streamer)
+            )
         except ValueError as e:  # streamer not found remotely
             note, remote = str(e), None
         except Exception as e:  # offline / network failure — local still shows

@@ -230,7 +230,11 @@ downloaded chat + watched history from *either* screen (the list's highlighted
 row, or the open VOD) — always behind a confirm; the VOD stays listed as an
 undownloaded, re-downloadable row.
 Downloads run as a non-blocking background worker — you keep browsing while a
-chat downloads, the row shows a spinner + a live progress bar/percent (how far
+chat downloads. Twitch list refreshes also fetch in a background worker, keeping
+the current list usable until results arrive. Repeated refresh requests are
+ignored while one is running. Local files are re-read when merging the response.
+During a download,
+the row shows a spinner + a live progress bar/percent (how far
 the fetched chat has reached through the VOD), and it flips to downloaded when it
 finishes. The list's watched column is blank for undownloaded VODs — coverage
 only means something once the chat is on disk.

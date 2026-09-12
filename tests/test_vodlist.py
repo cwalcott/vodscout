@@ -45,6 +45,28 @@ def _meta(streamer_dir, vid):
     return json.loads(path.read_text()) if path.exists() else None
 
 
+def test_prefetched_refresh_uses_current_download_state(tmp_path, monkeypatch):
+    config = Config(tmp_path)
+    remote = [_remote("111"), _remote("222")]
+    sdir = _streamer_dir(tmp_path)
+    # A download completed while the background request was running.
+    (sdir / "111.txt").write_text("")
+
+    def unexpected_request(streamer):
+        raise AssertionError("Prefetched refresh must not repeat the network call")
+
+    monkeypatch.setattr(fetcher, "list_remote_vods", unexpected_request)
+    rows, _, note = vodlist.merged_vods(
+        "shroud", config, offline=False, remote_vods=remote
+    )
+    assert note is None
+    assert {r["id"]: r["downloaded"] for r in rows} == {"111": True, "222": False}
+    assert _meta(sdir, "222") is not None
+    rows, _, note = vodlist.merged_vods("shroud", config, offline=False, remote_vods=[])
+    assert note is None
+    assert [r["id"] for r in rows] == ["111"]
+
+
 def test_remote_refresh_caches_all_recent_vods(tmp_path, monkeypatch):
     config = Config(chat_dir=tmp_path)
     sdir = _streamer_dir(tmp_path)

@@ -15,6 +15,14 @@ Format:
 
 ---
 
+## 2026-09-12 — Twitch list refresh runs off the UI thread
+
+- TUI `r` fetches remote VODs in a thread worker, keeping existing rows usable
+  and ignoring duplicate refresh requests until completion. The UI merges the
+  response with current local files after the request finishes, so concurrent
+  downloads/deletions are reflected. Failures retain the list and show a warning;
+  offline refresh stays local. Verified with a delayed-request headless pilot.
+
 ## 2026-09-12 — first refresh creates the metadata cache directory
 
 - Metadata writes create the streamer directory (and missing parents), so a
