@@ -15,6 +15,17 @@ Format:
 
 ---
 
+## 2026-09-13 — fit long emote names to the VOD pane
+
+- Truncate only the rendered emote label, with a cell-aware ellipsis, so one
+  unusually long provider emote does not force horizontal scrolling at normal
+  terminal widths. Preserve the full name as the row key for exact selection and
+  favoriting; below a 12-cell label minimum, allow horizontal scrolling. Use a
+  fixed-width column with render-time ellipsis so opening a VOD stays linear in
+  the number of emotes and never lays out the full-width names first.
+
+---
+
 ## 2026-09-12 — remove unused implementation leftovers
 
 - Remove the frequency API's unused minimum/start/end options after dropping

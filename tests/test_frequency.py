@@ -1,6 +1,7 @@
 import asyncio
 import json
 
+from rich.cells import cell_len
 from textual.widgets import DataTable, Input
 
 from vodscout import actions, analyzer, watched
@@ -125,5 +126,41 @@ def test_emote_first_ui_search_sort_and_mark(tmp_path):
             assert screen.current_emote is None
             assert screen.sort_by_count
             assert sum(w.count for w in screen._raw_moments) == 6
+
+    asyncio.run(run())
+
+
+def test_long_emote_does_not_force_horizontal_scroll_at_normal_width(tmp_path):
+    async def run():
+        config = make_chat(tmp_path)
+        log = tmp_path / "streamer" / "111.txt"
+        long_name = "AnUnusuallyLongProviderEmoteNameThatWouldWidenThePane"
+        with log.open("a") as f:
+            message = {"time": 22, "msg": long_name, "emotes": [long_name]}
+            f.write("\n" + json.dumps(message))
+
+        app = VodscoutApp(config, "streamer", offline=True)
+        async with app.run_test(size=(120, 24)) as pilot:
+            screen = VodScreen(
+                {"id": "111", "title": "Test", "created_at": "", "duration_seconds": 30}
+            )
+            await app.push_screen(screen)
+            await pilot.pause()
+
+            table = screen.query_one("#emotes", DataTable)
+            assert not table.show_horizontal_scrollbar
+            label = table.get_cell(long_name, screen._emote_key)
+            assert label.overflow == "ellipsis"
+            assert cell_len(label.plain) > table.columns[screen._emote_key].width
+            width = table.columns[screen._emote_key].width
+            await pilot.resize_terminal(240, 24)
+            await pilot.pause()
+            assert table.columns[screen._emote_key].width > width
+            assert not table.show_horizontal_scrollbar
+            # Selection still carries the exact untruncated emote name.
+            row = table.get_row_index(long_name)
+            table.move_cursor(row=row)
+            await pilot.press("enter")
+            assert screen.current_emote == long_name
 
     asyncio.run(run())

@@ -84,6 +84,11 @@ def _dl_indicator(spin: int, done: int, total: int | None) -> str:
 # clipped to nothing.
 _MIN_TITLE = 15
 
+# Keep enough of an emote visible to identify it on very narrow terminals. Below
+# this, the pane may scroll horizontally rather than reducing every name to a
+# star and a couple of characters.
+_MIN_EMOTE = 12
+
 
 def _ellipsize(text: str, width: int) -> str:
     """Truncate `text` to fit `width` terminal cells, marking any cut with a
@@ -610,6 +615,8 @@ class VodScreen(Screen):
             an.FrequencyWindow
         ] = []  # all moments (watched-flagged)
         self._emote_counts: Counter = Counter()
+        self._emote_key = None
+        self._uses_key = None
 
     @property
     def _streamer(self) -> str:
@@ -730,13 +737,16 @@ class VodScreen(Screen):
     def _populate_emotes(self) -> None:
         table = self.query_one("#emotes", DataTable)
         table.clear(columns=True)
-        table.add_columns("emote", "uses")
         items = self._emote_counts.most_common()
         items += [
             (name, 0)
             for name in sorted(self.favorites)
             if name not in self._emote_counts
         ]
+        uses_width = max([cell_len("uses"), *(cell_len(str(n)) for _, n in items)])
+        emote_width = self._emote_column_width(table, uses_width)
+        self._emote_key = table.add_column("emote", width=emote_width)
+        self._uses_key = table.add_column("uses", width=uses_width)
         if not items:
             table.add_row("[dim](no emotes)[/dim]", "")
             return
@@ -744,7 +754,44 @@ class VodScreen(Screen):
         rest = [it for it in items if it[0] not in self.favorites]
         for name, n in favs + rest:
             star = "★ " if name in self.favorites else "  "
-            table.add_row(f"{star}{name}", str(n), key=name)
+            label = Text(f"{star}{name}", no_wrap=True, overflow="ellipsis")
+            table.add_row(label, str(n), key=name)
+
+    def _emote_column_width(self, table: DataTable, uses_width: int) -> int:
+        """Return the emote cell width that fits beside the uses column."""
+        # The real content region excludes the border and any vertical scrollbar.
+        # Before first layout, the emotes pane receives one third of #panes.
+        width = table.scrollable_content_region.width or max(
+            self.app.size.width // 3 - 2, 0
+        )
+        return max(width - uses_width - 4 * table.cell_padding, _MIN_EMOTE)
+
+    def _apply_emote_width(self) -> None:
+        """Resize the fixed emote column when its pane changes width.
+
+        DataTable auto-sizes to its longest cell, so one provider emote with an
+        unusually long name otherwise creates a large horizontal scrollbar. The
+        column is fixed-width and Rich ellipsizes labels while rendering; this
+        avoids rewriting every row and repeatedly rescanning the entire column.
+        """
+        if self._emote_key is None or self._uses_key is None:
+            return
+        table = self.query_one("#emotes", DataTable)
+        column = table.columns[self._emote_key]
+        width = self._emote_column_width(table, table.columns[self._uses_key].width)
+        if column.width == width:
+            return
+        column.width = width
+        # DataTable has no public column-resize method. Queue one dimension pass;
+        # because both columns are fixed-width, this is constant-time in row count.
+        table._require_update_dimensions = True
+        table._update_count += 1
+        table._clear_caches()
+        table.check_idle()
+        table.refresh(layout=True)
+
+    def on_resize(self) -> None:
+        self._apply_emote_width()
 
     # --- actions ---------------------------------------------------------
 
